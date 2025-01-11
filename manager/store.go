@@ -4,18 +4,23 @@ import (
 	"database/sql"
 	"errors"
 	"net/netip"
+	"time"
 
-	"github.com/caldog20/calnet/manager/types"
+	"github.com/caldog20/calnet/types"
 	_ "modernc.org/sqlite"
 )
 
 var ErrNotFound = errors.New("record not found in database")
 
 type Store interface {
-	GetPeer(publicKey string) (*types.Peer, error)
-	CreatePeer(peer *types.Peer) error
-	DeletePeer(publicKey string) error
+	GetNodes() (types.Nodes, error)
+	GetPeersOfNode(id uint64) (types.Nodes, error)
+	GetNodesByPublicKey(publicKey string) (*types.Node, error)
+	GetNodeByID(id uint64) (*types.Node, error)
+	CreateNode(peer *types.Node) error
+	DeleteNode(publicKey string) error
 	GetAllocatedIps() ([]netip.Addr, error)
+	UpdatePeer(peer *types.Node) error
 	Close() error
 }
 
@@ -23,29 +28,79 @@ type SqlStore struct {
 	DB *sql.DB
 }
 
-func (s *SqlStore) GetPeer(publicKey string) (*types.Peer, error) {
-	peer := &types.Peer{}
-	err := s.DB.QueryRow("SELECT * FROM peers WHERE publickey = ?", publicKey).Scan(peer)
+func parseNode(row *sql.Rows) (*types.Node, error) {
+	var expireTime int64
+	var ipString string
+
+	node := &types.Node{}
+	err := row.Scan(&node.ID, &node.PublicKey, &expireTime, &node.Hostname, &ipString, &node.Disabled, &node.Endpoints, &node.Routes)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, ErrNotFound
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
-	return peer, nil
+	node.KeyExpiry = time.Unix(0, expireTime)
+	node.TunnelIP = netip.MustParseAddr(ipString)
+
+	return node, nil
 }
 
-func (s *SqlStore) CreatePeer(peer *types.Peer) error {
-	stmt, err := s.DB.Prepare(
-		"INSERT INTO peers (publickey, tunnelip, hostname, disabled) VALUES (?, ?, ?, ?)",
-	)
+func (s *SqlStore) GetPeersOfNode(id uint64) (types.Nodes, error) {
+	stmt, err := s.DB.Prepare("SELECT * FROM nodes WHERE id != ? ORDER BY id ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.Query(id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes types.Nodes
+
+	for rows.Next() {
+		node, err := parseNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+func (s *SqlStore) GetNodes() (types.Nodes, error) {
+	stmt, err := s.DB.Prepare("SELECT * FROM nodes ORDER BY id ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.Query()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes types.Nodes
+
+	for rows.Next() {
+		node, err := parseNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+func (s *SqlStore) UpdatePeer(peer *types.Node) error {
+	stmt, err := s.DB.Prepare("UPDATE nodes SET public_key = ?, key_expiry = ?, tunnel_ip = ?, hostname = ?, disabled = ?, endpoints = ?, routes = ? WHERE id = ?")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(peer.PublicKey, peer.TunnelIP.String(), peer.Hostname, peer.Connected, peer.Disabled)
+	_, err = stmt.Exec(peer.PublicKey, peer.KeyExpiry.UnixNano(), peer.TunnelIP.String(), peer.Hostname, peer.Disabled, peer.Endpoints, peer.Routes, peer.ID)
 	if err != nil {
 		return err
 	}
@@ -53,8 +108,66 @@ func (s *SqlStore) CreatePeer(peer *types.Peer) error {
 	return nil
 }
 
-func (s *SqlStore) DeletePeer(publicKey string) error {
-	stmt, err := s.DB.Prepare("DELETE FROM peers WHERE publickey = ?")
+func (s *SqlStore) GetNodeByID(id uint64) (*types.Node, error) {
+	peer := &types.Node{}
+	var expireTime int64
+	var ipString string
+	err := s.DB.QueryRow("SELECT * FROM nodes WHERE id = ?", id).Scan(&peer.ID, &peer.PublicKey, &expireTime, &peer.Hostname, &ipString, &peer.Disabled, &peer.Endpoints, &peer.Routes)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		} else {
+			return nil, err
+		}
+	}
+	peer.KeyExpiry = time.Unix(0, expireTime)
+	peer.TunnelIP = netip.MustParseAddr(ipString)
+	return peer, nil
+}
+
+func (s *SqlStore) GetNodesByPublicKey(publicKey string) (*types.Node, error) {
+	peer := &types.Node{}
+	var expireTime int64
+	var ipString string
+	err := s.DB.QueryRow("SELECT * FROM nodes WHERE public_key = ?", publicKey).Scan(&peer.ID, &peer.PublicKey, &expireTime, &peer.Hostname, &ipString, &peer.Disabled, &peer.Endpoints, &peer.Routes)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		} else {
+			return nil, err
+		}
+	}
+	peer.KeyExpiry = time.Unix(0, expireTime)
+	peer.TunnelIP = netip.MustParseAddr(ipString)
+	return peer, nil
+}
+
+func (s *SqlStore) CreateNode(peer *types.Node) error {
+	stmt, err := s.DB.Prepare(
+		"INSERT INTO nodes (public_key, key_expiry, tunnel_ip, hostname, disabled, endpoints, routes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+	)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	res, err := stmt.Exec(peer.PublicKey, peer.KeyExpiry.UnixNano(), peer.TunnelIP.String(), peer.Hostname, peer.Disabled, peer.Endpoints, peer.Routes)
+	if err != nil {
+		return err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	peer.ID = uint64(id)
+
+	return nil
+}
+
+func (s *SqlStore) DeleteNode(publicKey string) error {
+	stmt, err := s.DB.Prepare("DELETE FROM nodes WHERE public_key = ?")
 	if err != nil {
 		return err
 	}
@@ -70,7 +183,7 @@ func (s *SqlStore) DeletePeer(publicKey string) error {
 
 func (s *SqlStore) GetAllocatedIps() ([]netip.Addr, error) {
 	var allocated []netip.Addr
-	rows, err := s.DB.Query("SELECT tunnelip FROM peers")
+	rows, err := s.DB.Query("SELECT tunnel_ip FROM nodes")
 	if err != nil {
 		return nil, err
 	}
@@ -102,12 +215,15 @@ func NewSqlStore(path string) (Store, error) {
 		return nil, err
 	}
 
-	peerTable := `CREATE TABLE IF NOT EXISTS peers (
+	peerTable := `CREATE TABLE IF NOT EXISTS nodes (
   id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-  publickey TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL UNIQUE,
+  key_expiry INTEGER,
   hostname TEXT UNIQUE,
-  tunnelip TEXT UNIQUE,
-  disabled INTEGER
+  tunnel_ip TEXT UNIQUE,
+  disabled INTEGER,
+  endpoints TEXT,
+  routes TEXT
   );`
 
 	_, err = db.Exec(peerTable)

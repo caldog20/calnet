@@ -14,6 +14,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	//logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	//slog.SetDefault(logger)
+
 	store, err := manager.NewSqlStore("store.db")
 	if err != nil {
 		log.Fatal(err)

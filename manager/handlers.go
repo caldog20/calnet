@@ -2,58 +2,196 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
 	"time"
 
-	"connectrpc.com/connect"
-	mgmtv1 "github.com/caldog20/calnet/proto/gen/management/v1"
+	"github.com/caldog20/calnet/types"
+	"github.com/coder/websocket"
 )
 
-func (s *Server) Login(
-	ctx context.Context,
-	req *connect.Request[mgmtv1.LoginRequest],
-) (*connect.Response[mgmtv1.LoginResponse], error) {
-	if !s.debugMode {
-		err := validatePublicKey(req.Msg.GetPublicKey())
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid public key"))
-		}
-		// TODO: validate machine id
+const (
+	NewKeyExpiryTime = (24 * time.Hour) * 30
+)
+
+func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
+	nodeKey := req.Header.Get("X-Node-Key")
+	if nodeKey == "" {
+		http.Error(w, "node key not provided", http.StatusBadRequest)
+		return
 	}
 
-	peer, err := s.store.GetPeer()
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, "error reading request body", http.StatusBadRequest)
+		return
+	}
 
-	err := s.loginPeer(req.Msg)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	} else if errors.Is(err, ErrNotFound) {
-		err = s.registerPeer(req.Msg)
-		if err != nil {
-			if errors.Is(err, ErrInvalidProvisionKey) {
-				return nil, connect.NewError(connect.CodeUnauthenticated, err)
-			} else {
-				return nil, connect.NewError(connect.CodeInternal, err)
+	loginRequest := &types.LoginRequest{}
+	err = json.Unmarshal(body, loginRequest)
+	if err != nil {
+		http.Error(w, "malformed request body", http.StatusBadRequest)
+		return
+	}
+
+	peer, err := s.store.GetNodesByPublicKey(nodeKey)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			// Node is not registered
+			if loginRequest.ProvisionKey != "please" {
+				http.Error(w, "error registering node: invalid provision key", http.StatusUnauthorized)
+				return
+			}
+
+			peerIp, err := s.ipam.Allocate()
+			if err != nil {
+				http.Error(w, "error allocating node ip address", http.StatusInternalServerError)
+				return
+			}
+
+			// First prefix is route list is always the base network prefix for the network
+			prefix := s.ipam.GetPrefix()
+			peer := &types.Node{
+				PublicKey: nodeKey,
+				Hostname:  loginRequest.Hostname,
+				Connected: false,
+				Disabled:  false,
+				KeyExpiry: time.Now().Add(NewKeyExpiryTime),
+				TunnelIP:  peerIp,
+				Routes: []types.Route{
+					{prefix},
+				},
+			}
+
+			err = s.store.CreateNode(peer)
+			if err != nil {
+				// Release allocated IP back into the pool
+				s.ipam.Release(peerIp)
+				http.Error(w, fmt.Sprintf("error saving node to database: %s", err.Error()), http.StatusInternalServerError)
+				return
+			}
+
+		} else {
+			// Some other error trying to retrieve peer from database
+			http.Error(w, "error finding node in database", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Node was found, check if key is expired or if metadata needs an update
+		// TODO: Way to renew key
+		if peer.IsExpired() {
+			http.Error(w, "node key is expired", http.StatusUnauthorized)
+			return
+		}
+
+		if peer.IsDisabled() {
+			http.Error(w, "node is disabled", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	//w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
+	nodeKey := req.Header.Get("X-Node-Key")
+	if nodeKey == "" {
+		http.Error(w, "node key not provided", http.StatusBadRequest)
+		return
+	}
+
+	peer, err := s.store.GetNodesByPublicKey(nodeKey)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			http.Error(w, "error: node is not registered", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "error validating node", http.StatusInternalServerError)
+		return
+	}
+
+	if peer.IsExpired() {
+		http.Error(w, "node key is expired", http.StatusUnauthorized)
+		return
+	}
+
+	if peer.IsDisabled() {
+		http.Error(w, "node is disabled", http.StatusUnauthorized)
+		return
+	}
+
+	conn, err := websocket.Accept(w, req, nil)
+	if err != nil {
+		slog.Error("error upgrading websocket connection", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan types.NodeUpdateResponse, 3)
+	s.nm.Subscribe(peer.ID, c)
+
+	defer func() {
+		cancel()
+		conn.CloseNow()
+		s.nm.Unsubscribe(peer.ID, c)
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-c:
+				if !ok {
+					slog.Info("server closed update channel", "node ID", peer.ID)
+					return
+				}
+				data, err := json.Marshal(update)
+				if err != nil {
+					slog.Error("error marshaling update response", "node ID", peer.ID, "error", err)
+					return
+				}
+				err = conn.Write(ctx, websocket.MessageText, data)
+				if err != nil {
+					slog.Error("error writing node update response", "node ID", peer.ID, "error", err)
+					return
+				}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if errors.As(err, &websocket.CloseError{}) {
+					return
+				}
+				slog.Error("error reading update response", "node ID", peer.ID, "error", err.Error())
+				return
+			}
+
+			update := types.NodeUpdateRequest{}
+			err = json.Unmarshal(data, &update)
+			if err != nil {
+				slog.Error("error unmarshalling node update response", "node ID", peer.ID, "error", err.Error())
+				return
+			}
+			if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
+				return
 			}
 		}
 	}
-
-	// TODO: Generate token for peer network update routine
-	return connect.NewResponse(&mgmtv1.LoginResponse{}), nil
-}
-
-func (s *Server) NetworkUpdate(
-	ctx context.Context,
-	req *connect.Request[mgmtv1.NetworkUpdateRequest],
-) (*connect.Response[mgmtv1.NetworkUpdateResponse], error) {
-	// TODO: Validate token and peer public key
-	publicKey := req.Msg.GetPublicKey()
-	rev, err := s.GetPeerUpdateRevision(publicKey)
-	t := time.NewTimer(time.Second * 5)
-	select {
-	case <-t.C:
-		return connect.NewResponse(&mgmtv1.NetworkUpdateResponse{Revision: rev}), nil
-	case update := <-s.GetPeerUpdate(publicKey):
-		return connect.NewResponse(update), nil
-	}
-
 }
