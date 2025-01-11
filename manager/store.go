@@ -15,7 +15,7 @@ var ErrNotFound = errors.New("record not found in database")
 type Store interface {
 	GetNodes() (types.Nodes, error)
 	GetPeersOfNode(id uint64) (types.Nodes, error)
-	GetNodesByPublicKey(publicKey string) (*types.Node, error)
+	GetNodeByPublicKey(publicKey string) (*types.Node, error)
 	GetNodeByID(id uint64) (*types.Node, error)
 	CreateNode(peer *types.Node) error
 	DeleteNode(publicKey string) error
@@ -109,10 +109,7 @@ func (s *SqlStore) UpdatePeer(peer *types.Node) error {
 }
 
 func (s *SqlStore) GetNodeByID(id uint64) (*types.Node, error) {
-	peer := &types.Node{}
-	var expireTime int64
-	var ipString string
-	err := s.DB.QueryRow("SELECT * FROM nodes WHERE id = ?", id).Scan(&peer.ID, &peer.PublicKey, &expireTime, &peer.Hostname, &ipString, &peer.Disabled, &peer.Endpoints, &peer.Routes)
+	rows, err := s.DB.Query("SELECT * FROM nodes WHERE id = ?", id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
@@ -120,16 +117,17 @@ func (s *SqlStore) GetNodeByID(id uint64) (*types.Node, error) {
 			return nil, err
 		}
 	}
-	peer.KeyExpiry = time.Unix(0, expireTime)
-	peer.TunnelIP = netip.MustParseAddr(ipString)
-	return peer, nil
+	defer rows.Close()
+
+	node, err := parseNode(rows)
+	if err != nil {
+		return nil, err
+	}
+	return node, nil
 }
 
-func (s *SqlStore) GetNodesByPublicKey(publicKey string) (*types.Node, error) {
-	peer := &types.Node{}
-	var expireTime int64
-	var ipString string
-	err := s.DB.QueryRow("SELECT * FROM nodes WHERE public_key = ?", publicKey).Scan(&peer.ID, &peer.PublicKey, &expireTime, &peer.Hostname, &ipString, &peer.Disabled, &peer.Endpoints, &peer.Routes)
+func (s *SqlStore) GetNodeByPublicKey(publicKey string) (*types.Node, error) {
+	rows, err := s.DB.Query("SELECT * FROM nodes WHERE public_key = ?", publicKey)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
@@ -137,12 +135,16 @@ func (s *SqlStore) GetNodesByPublicKey(publicKey string) (*types.Node, error) {
 			return nil, err
 		}
 	}
-	peer.KeyExpiry = time.Unix(0, expireTime)
-	peer.TunnelIP = netip.MustParseAddr(ipString)
-	return peer, nil
+	defer rows.Close()
+
+	node, err := parseNode(rows)
+	if err != nil {
+		return nil, err
+	}
+	return node, nil
 }
 
-func (s *SqlStore) CreateNode(peer *types.Node) error {
+func (s *SqlStore) CreateNode(node *types.Node) error {
 	stmt, err := s.DB.Prepare(
 		"INSERT INTO nodes (public_key, key_expiry, tunnel_ip, hostname, disabled, endpoints, routes) VALUES (?, ?, ?, ?, ?, ?, ?)",
 	)
@@ -151,7 +153,7 @@ func (s *SqlStore) CreateNode(peer *types.Node) error {
 	}
 	defer stmt.Close()
 
-	res, err := stmt.Exec(peer.PublicKey, peer.KeyExpiry.UnixNano(), peer.TunnelIP.String(), peer.Hostname, peer.Disabled, peer.Endpoints, peer.Routes)
+	res, err := stmt.Exec(node.PublicKey, node.KeyExpiry.UnixNano(), node.TunnelIP.String(), node.Hostname, node.Disabled, node.Endpoints, node.Routes)
 	if err != nil {
 		return err
 	}
@@ -161,7 +163,7 @@ func (s *SqlStore) CreateNode(peer *types.Node) error {
 		return err
 	}
 
-	peer.ID = uint64(id)
+	node.ID = uint64(id)
 
 	return nil
 }

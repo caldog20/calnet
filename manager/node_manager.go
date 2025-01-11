@@ -51,7 +51,7 @@ func (nm *NodeManager) Unsubscribe(id uint64, c chan types.NodeUpdateResponse) {
 }
 
 func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey string, msg types.NodeUpdateRequest) bool {
-	node, err := nm.store.GetNodesByPublicKey(nodeKey)
+	node, err := nm.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
 		log.Printf("handlemessage: error getting peer by public key: %v", err)
 		return false

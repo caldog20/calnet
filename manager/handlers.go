@@ -39,7 +39,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	peer, err := s.store.GetNodesByPublicKey(nodeKey)
+	node, err := s.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			// Node is not registered
@@ -56,7 +56,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 			// First prefix is route list is always the base network prefix for the network
 			prefix := s.ipam.GetPrefix()
-			peer := &types.Node{
+			node := &types.Node{
 				PublicKey: nodeKey,
 				Hostname:  loginRequest.Hostname,
 				Connected: false,
@@ -68,7 +68,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 				},
 			}
 
-			err = s.store.CreateNode(peer)
+			err = s.store.CreateNode(node)
 			if err != nil {
 				// Release allocated IP back into the pool
 				s.ipam.Release(peerIp)
@@ -77,19 +77,19 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 			}
 
 		} else {
-			// Some other error trying to retrieve peer from database
+			// Some other error trying to retrieve node from database
 			http.Error(w, "error finding node in database", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// Node was found, check if key is expired or if metadata needs an update
 		// TODO: Way to renew key
-		if peer.IsExpired() {
+		if node.IsExpired() {
 			http.Error(w, "node key is expired", http.StatusUnauthorized)
 			return
 		}
 
-		if peer.IsDisabled() {
+		if node.IsDisabled() {
 			http.Error(w, "node is disabled", http.StatusUnauthorized)
 			return
 		}
@@ -106,7 +106,7 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	peer, err := s.store.GetNodesByPublicKey(nodeKey)
+	node, err := s.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			http.Error(w, "error: node is not registered", http.StatusNotFound)
@@ -116,12 +116,12 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if peer.IsExpired() {
+	if node.IsExpired() {
 		http.Error(w, "node key is expired", http.StatusUnauthorized)
 		return
 	}
 
-	if peer.IsDisabled() {
+	if node.IsDisabled() {
 		http.Error(w, "node is disabled", http.StatusUnauthorized)
 		return
 	}
@@ -134,12 +134,12 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan types.NodeUpdateResponse, 3)
-	s.nm.Subscribe(peer.ID, c)
+	s.nm.Subscribe(node.ID, c)
 
 	defer func() {
 		cancel()
 		conn.CloseNow()
-		s.nm.Unsubscribe(peer.ID, c)
+		s.nm.Unsubscribe(node.ID, c)
 	}()
 
 	go func() {
@@ -149,17 +149,17 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 				return
 			case update, ok := <-c:
 				if !ok {
-					slog.Info("server closed update channel", "node ID", peer.ID)
+					slog.Info("server closed update channel", "node ID", node.ID)
 					return
 				}
 				data, err := json.Marshal(update)
 				if err != nil {
-					slog.Error("error marshaling update response", "node ID", peer.ID, "error", err)
+					slog.Error("error marshaling update response", "node ID", node.ID, "error", err)
 					return
 				}
 				err = conn.Write(ctx, websocket.MessageText, data)
 				if err != nil {
-					slog.Error("error writing node update response", "node ID", peer.ID, "error", err)
+					slog.Error("error writing update response", "node ID", node.ID, "error", err)
 					return
 				}
 			}
@@ -179,14 +179,14 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 				if errors.As(err, &websocket.CloseError{}) {
 					return
 				}
-				slog.Error("error reading update response", "node ID", peer.ID, "error", err.Error())
+				slog.Error("error reading update request", "node ID", node.ID, "error", err.Error())
 				return
 			}
 
 			update := types.NodeUpdateRequest{}
 			err = json.Unmarshal(data, &update)
 			if err != nil {
-				slog.Error("error unmarshalling node update response", "node ID", peer.ID, "error", err.Error())
+				slog.Error("error unmarshalling update request", "node ID", node.ID, "error", err.Error())
 				return
 			}
 			if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
