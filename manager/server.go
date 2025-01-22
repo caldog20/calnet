@@ -43,7 +43,7 @@ func (s *Server) Run(ctx context.Context) error {
 	})
 	mux.HandleFunc("GET /updates", s.UpdateHandler)
 
-	ln, err := net.Listen("tcp", s.listenAddr)
+	ln, err := net.Listen("tcp4", s.listenAddr)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error listening on %s: %v", s.listenAddr, err))
 	}

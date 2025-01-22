@@ -7,7 +7,7 @@ import (
 
 type Node struct {
 	ID        uint64
-	PublicKey string
+	PublicKey PublicKey
 	KeyExpiry time.Time
 	TunnelIP  netip.Addr
 	Hostname  string

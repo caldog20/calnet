@@ -19,15 +19,15 @@ type Endpoint struct {
 	Type     EndpointType   `json:"type"`
 }
 
-func NewEndpoint(endpoint string, endpointType EndpointType) (*Endpoint, error) {
+func NewEndpoint(endpoint string, endpointType EndpointType) (Endpoint, error) {
 	ap, err := netip.ParseAddrPort(endpoint)
 	if err != nil {
-		return nil, err
+		return Endpoint{}, err
 	}
 	if !ap.IsValid() {
-		return nil, errors.New("invalid endpoint address")
+		return Endpoint{}, errors.New("invalid endpoint address")
 	}
-	return &Endpoint{Endpoint: ap, Type: endpointType}, nil
+	return Endpoint{Endpoint: ap, Type: endpointType}, nil
 }
 
 func (ep *Endpoint) String() string {

@@ -50,7 +50,7 @@ func (nm *NodeManager) Unsubscribe(id uint64, c chan types.NodeUpdateResponse) {
 	}
 }
 
-func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey string, msg types.NodeUpdateRequest) bool {
+func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg types.NodeUpdateRequest) bool {
 	node, err := nm.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
 		log.Printf("handlemessage: error getting peer by public key: %v", err)
@@ -111,10 +111,10 @@ func (nm *NodeManager) removeNode(id uint64) {
 }
 
 func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateResponse) {
-	node, err := nm.store.GetNodeByID(id)
-	if err != nil {
-		return
-	}
+	//node, err := nm.store.GetNodeByID(id)
+	//if err != nil {
+	//	return
+	//}
 
 	peers, err := nm.store.GetPeersOfNode(id)
 	if err != nil {
@@ -133,11 +133,11 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 	}
 
 	update := types.NodeUpdateResponse{
-		NodeConfig: &types.NodeConfig{
-			ID:       node.ID,
-			Routes:   node.Routes,
-			TunnelIP: node.TunnelIP.String(),
-		},
+		//NodeConfig: &types.NodeConfig{
+		//	ID:       node.ID,
+		//	Routes:   node.Routes,
+		//	TunnelIP: node.TunnelIP.String(),
+		//},
 		Peers: remotePeers,
 	}
 

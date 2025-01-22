@@ -15,10 +15,10 @@ var ErrNotFound = errors.New("record not found in database")
 type Store interface {
 	GetNodes() (types.Nodes, error)
 	GetPeersOfNode(id uint64) (types.Nodes, error)
-	GetNodeByPublicKey(publicKey string) (*types.Node, error)
+	GetNodeByPublicKey(publicKey types.PublicKey) (*types.Node, error)
 	GetNodeByID(id uint64) (*types.Node, error)
 	CreateNode(peer *types.Node) error
-	DeleteNode(publicKey string) error
+	DeleteNode(publicKey types.PublicKey) error
 	GetAllocatedIps() ([]netip.Addr, error)
 	UpdatePeer(peer *types.Node) error
 	Close() error
@@ -26,6 +26,21 @@ type Store interface {
 
 type SqlStore struct {
 	DB *sql.DB
+}
+
+func parseNodeSingle(row *sql.Row) (*types.Node, error) {
+	var expireTime int64
+	var ipString string
+
+	node := &types.Node{}
+	err := row.Scan(&node.ID, &node.PublicKey, &expireTime, &node.Hostname, &ipString, &node.Disabled, &node.Endpoints, &node.Routes)
+	if err != nil {
+		return nil, err
+	}
+	node.KeyExpiry = time.Unix(0, expireTime)
+	node.TunnelIP = netip.MustParseAddr(ipString)
+
+	return node, nil
 }
 
 func parseNode(row *sql.Rows) (*types.Node, error) {
@@ -109,36 +124,24 @@ func (s *SqlStore) UpdatePeer(peer *types.Node) error {
 }
 
 func (s *SqlStore) GetNodeByID(id uint64) (*types.Node, error) {
-	rows, err := s.DB.Query("SELECT * FROM nodes WHERE id = ?", id)
+	row := s.DB.QueryRow("SELECT * FROM nodes WHERE id = ?", id)
+	node, err := parseNodeSingle(row)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
-		} else {
-			return nil, err
 		}
-	}
-	defer rows.Close()
-
-	node, err := parseNode(rows)
-	if err != nil {
 		return nil, err
 	}
 	return node, nil
 }
 
-func (s *SqlStore) GetNodeByPublicKey(publicKey string) (*types.Node, error) {
-	rows, err := s.DB.Query("SELECT * FROM nodes WHERE public_key = ?", publicKey)
+func (s *SqlStore) GetNodeByPublicKey(publicKey types.PublicKey) (*types.Node, error) {
+	row := s.DB.QueryRow("SELECT * FROM nodes WHERE public_key = ?", publicKey)
+	node, err := parseNodeSingle(row)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
-		} else {
-			return nil, err
 		}
-	}
-	defer rows.Close()
-
-	node, err := parseNode(rows)
-	if err != nil {
 		return nil, err
 	}
 	return node, nil
@@ -168,7 +171,7 @@ func (s *SqlStore) CreateNode(node *types.Node) error {
 	return nil
 }
 
-func (s *SqlStore) DeleteNode(publicKey string) error {
+func (s *SqlStore) DeleteNode(publicKey types.PublicKey) error {
 	stmt, err := s.DB.Prepare("DELETE FROM nodes WHERE public_key = ?")
 	if err != nil {
 		return err

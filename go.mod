@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.12
 	github.com/gorilla/websocket v1.5.3
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
+	golang.org/x/crypto v0.8.0
 	modernc.org/sqlite v1.34.4
 )
 

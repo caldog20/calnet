@@ -5,17 +5,14 @@ import (
 	"net/netip"
 )
 
-const (
-	NodeUpdateRequestMessage = iota + 1
-)
-
 type LoginRequest struct {
-	Hostname     string `json:"hostname"`
+  Hostname     string `json:"hostname"`
 	ProvisionKey string `json:"provision_key"`
 }
 
 type LoginResponse struct {
-	AuthURL string `json:"auth_url"`
+	AuthURL    string     `json:"auth_url"`
+	NodeConfig NodeConfig `json:"node_config"`
 }
 
 type ServerKeyResponse struct {
@@ -31,21 +28,35 @@ type NodeUpdateResponse struct {
 	Peers        []RemotePeer `json:"peers,omitempty"`
 	NodeConfig   *NodeConfig  `json:"node_config,omitempty"`
 	RevokedPeers []RemotePeer `json:"revoked_peers,omitempty"`
+  CallPeer *CallPeerRequest `json:"call_peer",omitempty`
+}
+
+func (req *NodeUpdateResponse) String() string {
+	if req == nil {
+		return ""
+	}
+	b, _ := json.Marshal(req)
+	return string(b)
 }
 
 type NodeConfig struct {
-	ID       uint64 `json:"id"`
-	Routes   Routes `json:"routes,omitempty"`
-	TunnelIP string `json:"tunnel_ip"`
+	ID       uint64     `json:"id"`
+	Routes   Routes     `json:"routes,omitempty"`
+	TunnelIP netip.Addr `json:"tunnel_ip"`
 }
 
 type RemotePeer struct {
 	ID        uint64     `json:"id"`
 	Hostname  string     `json:"hostname"`
-	PublicKey string     `json:"public_key"`
+	PublicKey PublicKey  `json:"public_key"`
 	TunnelIP  netip.Addr `json:"tunnel_ip"`
 	Connected bool       `json:"connected"`
 	Endpoints []Endpoint `json:"endpoints"`
+}
+
+type CallPeerRequest struct {
+  ID uint64
+  endpoints []netip.AddrPort
 }
 
 type MessageWrapper struct {

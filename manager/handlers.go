@@ -1,30 +1,34 @@
 package manager
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 
 	"github.com/caldog20/calnet/types"
-	"github.com/coder/websocket"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	NewKeyExpiryTime = (24 * time.Hour) * 30
 )
 
+var upgrader = websocket.Upgrader{}
+
 func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
-	nodeKey := req.Header.Get("X-Node-Key")
-	if nodeKey == "" {
+	nodeKeyStr := req.Header.Get("X-Node-Key")
+	if nodeKeyStr == "" {
 		http.Error(w, "node key not provided", http.StatusBadRequest)
 		return
 	}
+
+	nodeKey := types.PublicKey{}
+	err := nodeKey.UnmarshalText([]byte(nodeKeyStr))
 
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -44,7 +48,11 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 		if errors.Is(err, ErrNotFound) {
 			// Node is not registered
 			if loginRequest.ProvisionKey != "please" {
-				http.Error(w, "error registering node: invalid provision key", http.StatusUnauthorized)
+				http.Error(
+					w,
+					"error registering node: invalid provision key",
+					http.StatusUnauthorized,
+				)
 				return
 			}
 
@@ -56,23 +64,25 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 			// First prefix is route list is always the base network prefix for the network
 			prefix := s.ipam.GetPrefix()
-			node := &types.Node{
+			node = &types.Node{
 				PublicKey: nodeKey,
 				Hostname:  loginRequest.Hostname,
 				Connected: false,
 				Disabled:  false,
 				KeyExpiry: time.Now().Add(NewKeyExpiryTime),
 				TunnelIP:  peerIp,
-				Routes: []types.Route{
-					{prefix},
-				},
+				Routes:    []types.Route{{Prefix: prefix}},
 			}
 
 			err = s.store.CreateNode(node)
 			if err != nil {
 				// Release allocated IP back into the pool
 				s.ipam.Release(peerIp)
-				http.Error(w, fmt.Sprintf("error saving node to database: %s", err.Error()), http.StatusInternalServerError)
+				http.Error(
+					w,
+					fmt.Sprintf("error saving node to database: %s", err.Error()),
+					http.StatusInternalServerError,
+				)
 				return
 			}
 
@@ -95,16 +105,32 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	//w.Header().Set("Content-Type", "application/json")
+	resp := types.LoginResponse{
+		NodeConfig: types.NodeConfig{
+			ID:       node.ID,
+			TunnelIP: node.TunnelIP,
+			Routes:   node.Routes,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(resp)
+	if err != nil {
+		log.Printf("error encoding login response: %v", err)
+		return
+	}
 }
 
 func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
-	nodeKey := req.Header.Get("X-Node-Key")
-	if nodeKey == "" {
+	nodeKeyStr := req.Header.Get("X-Node-Key")
+	if nodeKeyStr == "" {
 		http.Error(w, "node key not provided", http.StatusBadRequest)
 		return
 	}
+
+	nodeKey := types.PublicKey{}
+	err := nodeKey.UnmarshalText([]byte(nodeKeyStr))
 
 	node, err := s.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
@@ -126,39 +152,38 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	conn, err := websocket.Accept(w, req, nil)
+	conn, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		slog.Error("error upgrading websocket connection", "error", err)
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan types.NodeUpdateResponse, 3)
+	done := make(chan bool)
 	s.nm.Subscribe(node.ID, c)
 
 	defer func() {
-		cancel()
-		conn.CloseNow()
 		s.nm.Unsubscribe(node.ID, c)
+		conn.Close()
 	}()
 
+	// TODO: Move away from ReadJSON when moving to Nacl Encryption
 	go func() {
+		defer close(done)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-done:
 				return
 			case update, ok := <-c:
 				if !ok {
 					slog.Info("server closed update channel", "node ID", node.ID)
 					return
 				}
-				data, err := json.Marshal(update)
+				err = conn.WriteJSON(update)
 				if err != nil {
-					slog.Error("error marshaling update response", "node ID", node.ID, "error", err)
-					return
-				}
-				err = conn.Write(ctx, websocket.MessageText, data)
-				if err != nil {
+					if websocket.IsCloseError(err, websocket.CloseGoingAway) {
+						return
+					}
 					slog.Error("error writing update response", "node ID", node.ID, "error", err)
 					return
 				}
@@ -168,30 +193,28 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-done:
 			return
 		default:
-			_, data, err := conn.Read(ctx)
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) {
-					return
-				}
-				if errors.As(err, &websocket.CloseError{}) {
-					return
-				}
-				slog.Error("error reading update request", "node ID", node.ID, "error", err.Error())
-				return
-			}
+		}
 
-			update := types.NodeUpdateRequest{}
-			err = json.Unmarshal(data, &update)
-			if err != nil {
-				slog.Error("error unmarshalling update request", "node ID", node.ID, "error", err.Error())
+		update := types.NodeUpdateRequest{}
+		err := conn.ReadJSON(&update)
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseGoingAway) {
 				return
 			}
-			if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
-				return
-			}
+			slog.Error("error reading update request", "node ID", node.ID, "error", err.Error())
+			return
+		}
+
+		if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
+			slog.Warn(
+				"error handing node update: node could be expired or disabled",
+				"node ID",
+				node.ID,
+			)
+			return
 		}
 	}
 }
