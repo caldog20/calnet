@@ -68,7 +68,7 @@ func (c *Client) Login(hostname string) (*types.NodeConfig, error) {
 	return &loginResp.NodeConfig, nil
 }
 
-func (c *Client) SendEndointUpdate(endpoints []types.Endpoint) error {
+func (c *Client) SendEndointUpdate(endpoints []netip.AddrPort) error {
 	if endpoints == nil {
 		return nil
 	}

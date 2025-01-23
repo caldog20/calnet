@@ -6,7 +6,7 @@ import (
 )
 
 type LoginRequest struct {
-  Hostname     string `json:"hostname"`
+	Hostname     string `json:"hostname"`
 	ProvisionKey string `json:"provision_key"`
 }
 
@@ -20,15 +20,16 @@ type ServerKeyResponse struct {
 }
 
 type NodeUpdateRequest struct {
-	Endpoints []Endpoint `json:"endpoints"`
-	Hostname  string     `json:"hostname"`
+	Endpoints []netip.AddrPort `json:"endpoints"`
+	Hostname  string           `json:"hostname"`
+	CallPeer  *CallPeerRequest `json:"call_peer,omitempty"`
 }
 
 type NodeUpdateResponse struct {
-	Peers        []RemotePeer `json:"peers,omitempty"`
-	NodeConfig   *NodeConfig  `json:"node_config,omitempty"`
-	RevokedPeers []RemotePeer `json:"revoked_peers,omitempty"`
-  CallPeer *CallPeerRequest `json:"call_peer",omitempty`
+	Peers        []RemotePeer     `json:"peers,omitempty"`
+	NodeConfig   *NodeConfig      `json:"node_config,omitempty"`
+	RevokedPeers []RemotePeer     `json:"revoked_peers,omitempty"`
+	CallPeer     *CallPeerRequest `json:"call_peer,omitempty"`
 }
 
 func (req *NodeUpdateResponse) String() string {
@@ -40,23 +41,23 @@ func (req *NodeUpdateResponse) String() string {
 }
 
 type NodeConfig struct {
-	ID       uint64     `json:"id"`
-	Routes   Routes     `json:"routes,omitempty"`
-	TunnelIP netip.Addr `json:"tunnel_ip"`
+	ID       uint64         `json:"id"`
+	Routes   []netip.Prefix `json:"routes,omitempty"`
+	TunnelIP netip.Addr     `json:"tunnel_ip"`
 }
 
 type RemotePeer struct {
-	ID        uint64     `json:"id"`
-	Hostname  string     `json:"hostname"`
-	PublicKey PublicKey  `json:"public_key"`
-	TunnelIP  netip.Addr `json:"tunnel_ip"`
-	Connected bool       `json:"connected"`
-	Endpoints []Endpoint `json:"endpoints"`
+	ID        uint64           `json:"id"`
+	Hostname  string           `json:"hostname"`
+	PublicKey PublicKey        `json:"public_key"`
+	TunnelIP  netip.Addr       `json:"tunnel_ip"`
+	Connected bool             `json:"connected"`
+	Endpoints []netip.AddrPort `json:"endpoints"`
 }
 
 type CallPeerRequest struct {
-  ID uint64
-  endpoints []netip.AddrPort
+	ID        uint64
+	Endpoints []netip.AddrPort
 }
 
 type MessageWrapper struct {

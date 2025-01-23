@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"io"
 
@@ -32,6 +33,10 @@ func NewPrivateKey() PrivateKey {
 	return PrivateKey{k: k}
 }
 
+func (k PrivateKey) Compare(other PrivateKey) bool {
+  return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
+}
+
 func (k PrivateKey) Public() PublicKey {
 	pub := PublicKey{}
 	curve25519.ScalarBaseMult(&pub.k, &k.k)
@@ -46,10 +51,7 @@ func (k PrivateKey) MarshalText() ([]byte, error) {
 
 func (k *PrivateKey) UnmarshalText(text []byte) error {
 	_, err := base64.StdEncoding.Decode(k.k[:], text)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (k PublicKey) MarshalText() ([]byte, error) {

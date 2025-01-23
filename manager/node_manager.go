@@ -2,22 +2,23 @@ package manager
 
 import (
 	"log"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
+	"github.com/caldog20/calnet/manager/store"
 	"github.com/caldog20/calnet/types"
 )
 
 type NodeManager struct {
-	store            Store
+	store            store.Store
 	connectedCounter atomic.Uint64
 	connected        sync.Map
 	mu               sync.Mutex
 	updates          map[uint64]chan types.NodeUpdateResponse
-	disconnectQueue  sync.Map
 }
 
-func NewNodeManager(store Store) *NodeManager {
+func NewNodeManager(store store.Store) *NodeManager {
 	return &NodeManager{
 		store:   store,
 		updates: make(map[uint64]chan types.NodeUpdateResponse),
@@ -26,13 +27,14 @@ func NewNodeManager(store Store) *NodeManager {
 
 func (nm *NodeManager) Subscribe(id uint64, c chan types.NodeUpdateResponse) {
 	nm.mu.Lock()
-	defer nm.mu.Unlock()
 
 	if e, ok := nm.updates[id]; ok {
 		close(e)
 	}
 
 	nm.updates[id] = c
+
+	nm.mu.Unlock()
 
 	nm.PeerConnectedEvent(id)
 	nm.queueFullUpdate(id, c)
@@ -50,6 +52,14 @@ func (nm *NodeManager) Unsubscribe(id uint64, c chan types.NodeUpdateResponse) {
 	}
 }
 
+func (nm *NodeManager) CloseAll() {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	for _, ch := range nm.updates {
+		close(ch)
+	}
+}
+
 func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg types.NodeUpdateRequest) bool {
 	node, err := nm.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
@@ -61,6 +71,10 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 		nm.revokeNodeNotify(node.ID)
 		log.Printf("handlemessage: node %s is expired or is disabled, closing updates channel", nodeKey)
 		return false
+	}
+
+	if msg.CallPeer != nil {
+		nm.handleCallPeerRequest(node.ID, msg.CallPeer.ID, msg.CallPeer.Endpoints)
 	}
 
 	updated := false
@@ -76,7 +90,7 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 	}
 
 	if updated {
-		err := nm.store.UpdatePeer(node)
+		err := nm.store.UpdateNode(node)
 		if err != nil {
 			log.Printf("handlemessage: error updating peer in db: %v", err)
 			return false
@@ -87,8 +101,30 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 	return true
 }
 
+func (nm *NodeManager) handleCallPeerRequest(srcID, dstID uint64, endpoints []netip.AddrPort) {
+	if endpoints == nil {
+		return
+	}
+
+	msg := types.NodeUpdateResponse{CallPeer: &types.CallPeerRequest{
+		ID:        srcID,
+		Endpoints: endpoints,
+	}}
+
+	// try to get channel for destination peer
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	peerChan, ok := nm.updates[dstID]
+	if ok {
+		select {
+		case peerChan <- msg:
+		default:
+		}
+	}
+}
+
 func (nm *NodeManager) changedNodeNotify(node *types.Node) {
-	rp := node.ToRemotePeer(true)
+	rp := node.ToRemotePeer(nm.isConnected(node.ID))
 	update := types.NodeUpdateResponse{
 		Peers: []types.RemotePeer{
 			rp,
@@ -128,7 +164,12 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 		if peer.IsExpired() || peer.IsDisabled() || peer.Endpoints == nil {
 			continue
 		}
-		rp := peer.ToRemotePeer(false)
+		isConnected := false
+		connected, ok := nm.connected.Load(peer.ID)
+		if ok {
+			isConnected = connected.(bool)
+		}
+		rp := peer.ToRemotePeer(isConnected)
 		remotePeers = append(remotePeers, rp)
 	}
 
@@ -141,7 +182,10 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 		Peers: remotePeers,
 	}
 
-	c <- update
+	select {
+	case c <- update:
+	default:
+	}
 }
 
 //func (nm *NodeManager) newNodeNotify(node *types.Node) {
@@ -181,6 +225,14 @@ func (nm *NodeManager) sendUpdateToPeers(nodeID uint64, update types.NodeUpdateR
 //
 //}
 
+func (nm *NodeManager) isConnected(id uint64) bool {
+	c, ok := nm.connected.Load(id)
+	if ok {
+		return c.(bool)
+	}
+	return false
+}
+
 func (nm *NodeManager) PeerConnectedEvent(id uint64) {
 	log.Printf("peer %d connected", id)
 	nm.connected.Store(id, true)
@@ -189,4 +241,5 @@ func (nm *NodeManager) PeerConnectedEvent(id uint64) {
 func (nm *NodeManager) PeerDisconnectedEvent(id uint64) {
 	log.Printf("peer %d disconnected", id)
 	nm.connected.Store(id, false)
+	nm.changedNodeNotify(&types.Node{ID: id})
 }

@@ -5,17 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
+	"github.com/caldog20/calnet/manager/store"
 	"github.com/caldog20/calnet/types"
 	"github.com/gorilla/websocket"
 )
 
 const (
-	NewKeyExpiryTime = (24 * time.Hour) * 30
+	NewKeyExpiryTime = (24 * time.Hour) * 120
+)
+
+var (
+	ErrInvalidProvisionKey = errors.New("invalid provisioning key")
+	ErrPeerDisabled        = errors.New("peer is disabled")
+	ErrKeyExpired          = errors.New("public key is expired")
 )
 
 var upgrader = websocket.Upgrader{}
@@ -29,6 +36,10 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 	nodeKey := types.PublicKey{}
 	err := nodeKey.UnmarshalText([]byte(nodeKeyStr))
+	if err != nil {
+		http.Error(w, "invalid node key", http.StatusBadRequest)
+		return
+	}
 
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -45,7 +56,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 	node, err := s.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) {
 			// Node is not registered
 			if loginRequest.ProvisionKey != "please" {
 				http.Error(
@@ -71,7 +82,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 				Disabled:  false,
 				KeyExpiry: time.Now().Add(NewKeyExpiryTime),
 				TunnelIP:  peerIp,
-				Routes:    []types.Route{{Prefix: prefix}},
+				Routes:    []netip.Prefix{prefix},
 			}
 
 			err = s.store.CreateNode(node)
@@ -117,7 +128,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	err = json.NewEncoder(w).Encode(resp)
 	if err != nil {
-		log.Printf("error encoding login response: %v", err)
+		slog.Error("error encoding login response", "error", err)
 		return
 	}
 }
@@ -131,10 +142,14 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 
 	nodeKey := types.PublicKey{}
 	err := nodeKey.UnmarshalText([]byte(nodeKeyStr))
+	if err != nil {
+		http.Error(w, "invalid node key", http.StatusBadRequest)
+		return
+	}
 
 	node, err := s.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "error: node is not registered", http.StatusNotFound)
 			return
 		}

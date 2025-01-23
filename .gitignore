@@ -25,6 +25,8 @@ go.work.sum
 .env
 bin/
 
-**/*.db-*
+*.db
+*.db-shm
+*.db-wal
 
 .idea/

@@ -6,15 +6,19 @@ import (
 )
 
 type Node struct {
-	ID        uint64
-	PublicKey PublicKey
+	ID        uint64    `gorm:"primaryKey;autoIncrement"`
+	PublicKey PublicKey `gorm:"serializer:json"`
 	KeyExpiry time.Time
-	TunnelIP  netip.Addr
+	TunnelIP  netip.Addr `gorm:"serializer:json"`
 	Hostname  string
 	Connected bool
 	Disabled  bool
-	Endpoints Endpoints
-	Routes    Routes
+	Endpoints []netip.AddrPort `gorm:"serializer:json"`
+	Routes    []netip.Prefix   `gorm:"serializer:json"`
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// User string
 }
 
 func (p *Node) IsDisabled() bool {
@@ -25,7 +29,7 @@ func (p *Node) IsExpired() bool {
 	return time.Now().After(p.KeyExpiry)
 }
 
-func (p *Node) GetEndpoints() Endpoints {
+func (p *Node) GetEndpoints() []netip.AddrPort {
 	return p.Endpoints
 }
 
@@ -46,6 +50,7 @@ func (p *Node) ToRemotePeer(connected bool) RemotePeer {
 type Nodes []*Node
 
 func (p Nodes) Len() int { return len(p) }
+
 func (p Nodes) ToMap() map[uint64]*Node {
 	m := make(map[uint64]*Node)
 	for _, node := range p {

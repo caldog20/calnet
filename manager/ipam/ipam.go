@@ -1,10 +1,11 @@
-package manager
+package ipam
 
 import (
 	"errors"
 	"net/netip"
 	"sync"
 
+	"github.com/caldog20/calnet/manager/store"
 	"go4.org/netipx"
 )
 
@@ -18,7 +19,7 @@ type IPAM struct {
 	last         netip.Addr
 }
 
-func NewIPAM(prefix netip.Prefix, store Store) (*IPAM, error) {
+func New(prefix netip.Prefix, store store.Store) (*IPAM, error) {
 	allocated, err := store.GetAllocatedIps()
 	if err != nil {
 		return nil, err
