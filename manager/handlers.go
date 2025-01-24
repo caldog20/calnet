@@ -75,7 +75,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 			// First prefix is route list is always the base network prefix for the network
 			prefix := s.ipam.GetPrefix()
-			node = &types.Node{
+			node = &Node{
 				PublicKey: nodeKey,
 				Hostname:  loginRequest.Hostname,
 				Connected: false,

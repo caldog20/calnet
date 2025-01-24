@@ -78,11 +78,6 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 	}
 
 	updated := false
-	if msg.Endpoints != nil {
-		log.Printf("handlemessage: updating endpoints for peer: %d", node.ID)
-		node.Endpoints = msg.Endpoints
-		updated = true
-	}
 	if msg.Hostname != "" {
 		log.Printf("handlemessage: updating hostname for peer: %d", node.ID)
 		node.Hostname = msg.Hostname
@@ -123,7 +118,7 @@ func (nm *NodeManager) handleCallPeerRequest(srcID, dstID uint64, endpoints []ne
 	}
 }
 
-func (nm *NodeManager) changedNodeNotify(node *types.Node) {
+func (nm *NodeManager) changedNodeNotify(node *Node) {
 	rp := node.ToRemotePeer(nm.isConnected(node.ID))
 	update := types.NodeUpdateResponse{
 		Peers: []types.RemotePeer{
@@ -161,7 +156,7 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 	var remotePeers []types.RemotePeer
 
 	for _, peer := range peers {
-		if peer.IsExpired() || peer.IsDisabled() || peer.Endpoints == nil {
+		if peer.IsExpired() || peer.IsDisabled() {
 			continue
 		}
 		isConnected := false
@@ -241,5 +236,5 @@ func (nm *NodeManager) PeerConnectedEvent(id uint64) {
 func (nm *NodeManager) PeerDisconnectedEvent(id uint64) {
 	log.Printf("peer %d disconnected", id)
 	nm.connected.Store(id, false)
-	nm.changedNodeNotify(&types.Node{ID: id})
+	nm.changedNodeNotify(&Node{ID: id})
 }

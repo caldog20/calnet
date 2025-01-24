@@ -1,20 +1,21 @@
-package types
+package manager
 
 import (
 	"net/netip"
 	"time"
+
+	"github.com/caldog20/calnet/types"
 )
 
 type Node struct {
-	ID        uint64    `gorm:"primaryKey;autoIncrement"`
-	PublicKey PublicKey `gorm:"serializer:json"`
+	ID        uint64          `gorm:"primaryKey;autoIncrement"`
+	PublicKey types.PublicKey `gorm:"serializer:json"`
 	KeyExpiry time.Time
 	TunnelIP  netip.Addr `gorm:"serializer:json"`
 	Hostname  string
 	Connected bool
 	Disabled  bool
-	Endpoints []netip.AddrPort `gorm:"serializer:json"`
-	Routes    []netip.Prefix   `gorm:"serializer:json"`
+	Routes    []netip.Prefix `gorm:"serializer:json"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -29,22 +30,17 @@ func (p *Node) IsExpired() bool {
 	return time.Now().After(p.KeyExpiry)
 }
 
-func (p *Node) GetEndpoints() []netip.AddrPort {
-	return p.Endpoints
-}
-
-func (p *Node) ToRemotePeer(connected bool) RemotePeer {
+func (p *Node) ToRemotePeer(connected bool) types.RemotePeer {
 	if p != nil {
-		return RemotePeer{
+		return types.RemotePeer{
 			ID:        p.ID,
 			Hostname:  p.Hostname,
 			PublicKey: p.PublicKey,
 			TunnelIP:  p.TunnelIP,
-			Endpoints: p.Endpoints,
 			Connected: connected,
 		}
 	}
-	return RemotePeer{}
+	return types.RemotePeer{}
 }
 
 type Nodes []*Node

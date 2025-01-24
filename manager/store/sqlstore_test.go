@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caldog20/calnet/manager"
 	"github.com/caldog20/calnet/types"
 )
 
@@ -25,7 +26,7 @@ func TestCreateNode(t *testing.T) {
 	priv := types.NewPrivateKey()
 	pub := priv.Public()
 
-	n := &types.Node{
+	n := &manager.Node{
 		PublicKey: pub,
 		KeyExpiry: time.Now(),
 		TunnelIP:  netip.MustParseAddr("1.1.1.1"),
