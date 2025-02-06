@@ -319,18 +319,6 @@ func (c *Conn) getBestAddr() netip.AddrPort {
 	defer c.mu.Unlock()
 
 	if !c.best.IsValid() {
-		// We don't have a valid IP
-		// Trigger candidate exchange in background which will kick off
-		// pings and call request once received
-		// c.triggerExchange(true)
-		// time.Sleep(time.Second * 1)
-		// if time.Since(c.lastExchange).Seconds() > 30 {
-		// 	c.exchange()
-		// } else if time.Since(c.lastPingCheck).Seconds() > 3 {
-		// 	c.pingAllLocked(false)
-		// } else if time.Since(c.lastPongAny).Seconds() >= 5 {
-		// 	c.pingAllLocked(true)
-		// }
 		switch {
 		case time.Since(c.lastExchange).Seconds() > 30:
 			c.exchange()
@@ -344,17 +332,9 @@ func (c *Conn) getBestAddr() netip.AddrPort {
 
 	if c.recheckBest.IsZero() || time.Since(c.recheckBest) > RecheckBestAddr {
 		c.pingAllLocked(false)
-		if time.Since(c.lastPongAny).Seconds() > 10 {
+		if time.Since(c.lastPongAny).Seconds() > 12 {
 			c.best = netip.AddrPort{}
 		}
-
-		// if time.Since(c.lastPingCheck).Seconds() >= 10 {
-		// 	c.pingAllLocked(false)
-		// } else {
-		// 	if time.Since(c.lastPongAny).Seconds() >= 5 {
-		// 		c.best = netip.AddrPort{}
-		// 	}
-		// }
 		c.recheckBest = time.Now().Add(RecheckBestAddr)
 	}
 

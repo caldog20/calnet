@@ -81,15 +81,15 @@ func Run(ctx context.Context, server, hostname string) error {
 						if hostname == "test" {
 							go writePeerConn(c)
 						}
-					} else {
-						node.mux.RemoveConn(peer.PublicKey)
-						c, err := node.mux.GetConn(peer.ID, peer.PublicKey)
-						if err != nil {
-							log.Println(err)
-							continue
-						}
-						node.peers[peer.ID] = c
-					}
+					 }//  else {
+					// 	node.mux.RemoveConn(peer.PublicKey)
+					// 	c, err := node.mux.GetConn(peer.ID, peer.PublicKey)
+					// 	if err != nil {
+					// 		log.Println(err)
+					// 		continue
+					// 	}
+					// 	node.peers[peer.ID] = c
+					// }
 				}
 				node.mu.Unlock()
 			}

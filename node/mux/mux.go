@@ -28,7 +28,6 @@ type Mux struct {
 	nodeID          uint64
 	nodeKey         types.PublicKey
 	conn            net.PacketConn
-	relayAddr       netip.AddrPort
 	listenEndpoints []netip.AddrPort
 	discoveredAddr  netip.AddrPort
 	xorMappedAddr   stun.XORMappedAddress
@@ -131,6 +130,7 @@ func (mux *Mux) GetConn(nodeID uint64, nodeKey types.PublicKey) (*Conn, error) {
 
 func (mux *Mux) RemoveConn(nodeKey types.PublicKey) {
 	mux.mu.Lock()
+	defer mux.mu.Unlock()
 	ec, ok := mux.nodeKeys[nodeKey]
 	if ok {
 		ec.Close()
