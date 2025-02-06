@@ -2,37 +2,32 @@ package node
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"net/netip"
 
+	"github.com/caldog20/calnet/control"
 	"github.com/caldog20/calnet/types"
-	"github.com/coder/websocket"
 )
 
 type Client struct {
-	ws         *websocket.Conn
 	hc         *http.Client
 	serverAddr string
 	publicKey  types.PublicKey
-	ip         netip.Addr
 }
 
 func NewClient(serverAddr string, key types.PublicKey) *Client {
 	return &Client{
-		ws:         nil,
 		hc:         &http.Client{},
 		serverAddr: serverAddr,
 		publicKey:  key,
 	}
 }
 
-func (c *Client) Login(hostname string) (*types.NodeConfig, error) {
-	loginReq := types.LoginRequest{
+func (c *Client) Login(hostname string) (*control.NodeConfig, error) {
+	loginReq := control.LoginRequest{
+		NodeKey:      c.publicKey,
 		Hostname:     hostname,
 		ProvisionKey: "please",
 	}
@@ -41,7 +36,7 @@ func (c *Client) Login(hostname string) (*types.NodeConfig, error) {
 		return nil, err
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, "http://"+c.serverAddr+"/login", bytes.NewReader(b))
+	req, _ := http.NewRequest(http.MethodPost, c.serverAddr + "/login", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Node-Key", c.publicKey.String())
 	resp, err := c.hc.Do(req)
@@ -54,12 +49,14 @@ func (c *Client) Login(hostname string) (*types.NodeConfig, error) {
 		return nil, fmt.Errorf("login failed: %s", resp.Status)
 	}
 
-	body, err := io.ReadAll(req.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	loginResp := types.LoginResponse{}
+	fmt.Println(string(body))
+
+	loginResp := control.LoginResponse{}
 	err = json.Unmarshal(body, &loginResp)
 	if err != nil {
 		return nil, err
@@ -68,68 +65,34 @@ func (c *Client) Login(hostname string) (*types.NodeConfig, error) {
 	return &loginResp.NodeConfig, nil
 }
 
-func (c *Client) SendEndointUpdate(endpoints []netip.AddrPort) error {
-	if endpoints == nil {
-		return nil
+func (c *Client) Poll() (*control.PollResponse, error) {
+	pollReq := control.PollRequest{
+		NodeKey: c.publicKey,
 	}
-
-	if c.ws == nil {
-		return nil
-	}
-
-	req := &types.NodeUpdateRequest{
-		Endpoints: endpoints,
-	}
-
-	b, err := json.Marshal(req)
+	b, err := json.Marshal(pollReq)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	err = c.ws.Write(context.Background(), websocket.MessageText, b)
+	req, _ := http.NewRequest(http.MethodPost, c.serverAddr+"/poll", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	return nil
-}
-
-func (c *Client) ReceiveUpdates(ctx context.Context) chan *types.NodeUpdateResponse {
-	header := http.Header{}
-	header.Set("X-Node-Key", c.publicKey.String())
-	conn, resp, err := websocket.Dial(ctx, "ws://"+c.serverAddr+"/updates", &websocket.DialOptions{
-		HTTPHeader: header,
-	})
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusRequestTimeout {
+		return nil, nil
+	} else if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("poll failed: %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-
-	fmt.Println(resp.StatusCode)
-	c.ws = conn
-
-	ch := make(chan *types.NodeUpdateResponse)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			update := &types.NodeUpdateResponse{}
-			_, b, err := conn.Read(ctx)
-			if err != nil {
-				close(ch)
-				log.Fatal(err)
-			}
-			err = json.Unmarshal(b, update)
-			if err != nil {
-				close(ch)
-				log.Fatal(err)
-			}
-			ch <- update
-		}
-	}()
-
-	return ch
+	pollResp := control.PollResponse{}
+	err = json.Unmarshal(body, &pollResp)
+	if err != nil {
+		return nil, err
+	}
+	return &pollResp, nil
 }

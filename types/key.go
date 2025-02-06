@@ -34,7 +34,7 @@ func NewPrivateKey() PrivateKey {
 }
 
 func (k PrivateKey) Compare(other PrivateKey) bool {
-  return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
+	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
 }
 
 func (k PrivateKey) Public() PublicKey {
@@ -73,7 +73,7 @@ func (k PublicKey) String() string {
 }
 
 func (k PublicKey) Raw() []byte {
-  return bytes.Clone(k.k[:])
+	return bytes.Clone(k.k[:])
 }
 
 func PublicKeyFromRawBytes(raw []byte) PublicKey {

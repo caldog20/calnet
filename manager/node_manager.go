@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/caldog20/calnet/control"
 	"github.com/caldog20/calnet/manager/store"
 	"github.com/caldog20/calnet/types"
 )
@@ -15,17 +16,18 @@ type NodeManager struct {
 	connectedCounter atomic.Uint64
 	connected        sync.Map
 	mu               sync.Mutex
-	updates          map[uint64]chan types.NodeUpdateResponse
+	updates          map[uint64]chan control.NodeUpdateResponse
 }
 
 func NewNodeManager(store store.Store) *NodeManager {
 	return &NodeManager{
+		mu:      sync.Mutex{},
 		store:   store,
-		updates: make(map[uint64]chan types.NodeUpdateResponse),
+		updates: make(map[uint64]chan control.NodeUpdateResponse),
 	}
 }
 
-func (nm *NodeManager) Subscribe(id uint64, c chan types.NodeUpdateResponse) {
+func (nm *NodeManager) Subscribe(id uint64, c chan control.NodeUpdateResponse) {
 	nm.mu.Lock()
 
 	if e, ok := nm.updates[id]; ok {
@@ -33,19 +35,17 @@ func (nm *NodeManager) Subscribe(id uint64, c chan types.NodeUpdateResponse) {
 	}
 
 	nm.updates[id] = c
-
 	nm.mu.Unlock()
 
 	nm.PeerConnectedEvent(id)
 	nm.queueFullUpdate(id, c)
 }
 
-func (nm *NodeManager) Unsubscribe(id uint64, c chan types.NodeUpdateResponse) {
+func (nm *NodeManager) Unsubscribe(id uint64, c chan control.NodeUpdateResponse) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	if e, ok := nm.updates[id]; ok {
 		if e == c {
-			close(c)
 			delete(nm.updates, id)
 			nm.PeerDisconnectedEvent(id)
 		}
@@ -60,7 +60,7 @@ func (nm *NodeManager) CloseAll() {
 	}
 }
 
-func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg types.NodeUpdateRequest) bool {
+func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg control.NodeUpdateRequest) bool {
 	node, err := nm.store.GetNodeByPublicKey(nodeKey)
 	if err != nil {
 		log.Printf("handlemessage: error getting peer by public key: %v", err)
@@ -73,8 +73,11 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 		return false
 	}
 
+	if msg.EndpointExchange != nil {
+		nm.handleEndpointExchange(node.ID, msg.EndpointExchange.ID, msg.EndpointExchange.Endpoints, msg.EndpointExchange.Request)
+	}
 	if msg.CallPeer != nil {
-		nm.handleCallPeerRequest(node.ID, msg.CallPeer.ID, msg.CallPeer.Endpoints)
+		nm.handleCallPeer(node.ID, msg.CallPeer.ID)
 	}
 
 	updated := false
@@ -96,32 +99,53 @@ func (nm *NodeManager) HandleNodeUpdateRequest(nodeKey types.PublicKey, msg type
 	return true
 }
 
-func (nm *NodeManager) handleCallPeerRequest(srcID, dstID uint64, endpoints []netip.AddrPort) {
+func (nm *NodeManager) sendMessage(id uint64, msg *control.NodeUpdateResponse) bool {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	peerChan, ok := nm.updates[id]
+	if ok {
+		select {
+		case peerChan <- *msg:
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func (nm *NodeManager) handleCallPeer(srcID, dstID uint64) {
+	msg := control.NodeUpdateResponse{CallPeer: &control.CallPeerRequest{
+		ID: srcID,
+	}}
+
+	ok := nm.sendMessage(dstID, &msg)
+	if !ok {
+		log.Printf("dropped call peer message from %d to %d", srcID, dstID)
+	}
+}
+
+func (nm *NodeManager) handleEndpointExchange(srcID, dstID uint64, endpoints []netip.AddrPort, request bool) {
 	if endpoints == nil {
 		return
 	}
 
-	msg := types.NodeUpdateResponse{CallPeer: &types.CallPeerRequest{
+	msg := control.NodeUpdateResponse{EndpointExchange: &control.PeerEndpointExchange{
 		ID:        srcID,
 		Endpoints: endpoints,
+		Request:   request,
 	}}
 
-	// try to get channel for destination peer
-	nm.mu.Lock()
-	defer nm.mu.Unlock()
-	peerChan, ok := nm.updates[dstID]
-	if ok {
-		select {
-		case peerChan <- msg:
-		default:
-		}
+	ok := nm.sendMessage(dstID, &msg)
+	if !ok {
+		log.Printf("dropped endpoint exchange message from %d to %d", srcID, dstID)
 	}
 }
 
-func (nm *NodeManager) changedNodeNotify(node *Node) {
+func (nm *NodeManager) changedNodeNotify(node *control.Node) {
 	rp := node.ToRemotePeer(nm.isConnected(node.ID))
-	update := types.NodeUpdateResponse{
-		Peers: []types.RemotePeer{
+	update := control.NodeUpdateResponse{
+		Peers: []control.RemotePeer{
 			rp,
 		},
 	}
@@ -141,7 +165,7 @@ func (nm *NodeManager) removeNode(id uint64) {
 	}
 }
 
-func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateResponse) {
+func (nm *NodeManager) queueFullUpdate(id uint64, c chan control.NodeUpdateResponse) {
 	//node, err := nm.store.GetNodeByID(id)
 	//if err != nil {
 	//	return
@@ -153,7 +177,7 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 		return
 	}
 
-	var remotePeers []types.RemotePeer
+	var remotePeers []control.RemotePeer
 
 	for _, peer := range peers {
 		if peer.IsExpired() || peer.IsDisabled() {
@@ -168,7 +192,7 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 		remotePeers = append(remotePeers, rp)
 	}
 
-	update := types.NodeUpdateResponse{
+	update := control.NodeUpdateResponse{
 		//NodeConfig: &types.NodeConfig{
 		//	ID:       node.ID,
 		//	Routes:   node.Routes,
@@ -192,8 +216,8 @@ func (nm *NodeManager) queueFullUpdate(id uint64, c chan types.NodeUpdateRespons
 //}
 
 func (nm *NodeManager) revokeNodeNotify(id uint64) {
-	update := types.NodeUpdateResponse{
-		RevokedPeers: []types.RemotePeer{
+	update := control.NodeUpdateResponse{
+		RevokedPeers: []control.RemotePeer{
 			{ID: id},
 		},
 	}
@@ -201,7 +225,7 @@ func (nm *NodeManager) revokeNodeNotify(id uint64) {
 	nm.sendUpdateToPeers(id, update)
 }
 
-func (nm *NodeManager) sendUpdateToPeers(nodeID uint64, update types.NodeUpdateResponse) {
+func (nm *NodeManager) sendUpdateToPeers(nodeID uint64, update control.NodeUpdateResponse) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 
@@ -231,10 +255,17 @@ func (nm *NodeManager) isConnected(id uint64) bool {
 func (nm *NodeManager) PeerConnectedEvent(id uint64) {
 	log.Printf("peer %d connected", id)
 	nm.connected.Store(id, true)
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	node, err := nm.store.GetNodeByID(id)
+	if err != nil {
+		return
+	}
+	nm.changedNodeNotify(node)
 }
 
 func (nm *NodeManager) PeerDisconnectedEvent(id uint64) {
 	log.Printf("peer %d disconnected", id)
 	nm.connected.Store(id, false)
-	nm.changedNodeNotify(&Node{ID: id})
+	nm.changedNodeNotify(&control.Node{ID: id})
 }

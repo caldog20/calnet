@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/caldog20/calnet/control"
 	"github.com/caldog20/calnet/manager/store"
 	"github.com/caldog20/calnet/types"
 	"github.com/gorilla/websocket"
@@ -47,7 +48,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	loginRequest := &types.LoginRequest{}
+	loginRequest := &control.LoginRequest{}
 	err = json.Unmarshal(body, loginRequest)
 	if err != nil {
 		http.Error(w, "malformed request body", http.StatusBadRequest)
@@ -75,7 +76,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 
 			// First prefix is route list is always the base network prefix for the network
 			prefix := s.ipam.GetPrefix()
-			node = &Node{
+			node = &control.Node{
 				PublicKey: nodeKey,
 				Hostname:  loginRequest.Hostname,
 				Connected: false,
@@ -116,8 +117,8 @@ func (s *Server) LoginHandler(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	resp := types.LoginResponse{
-		NodeConfig: types.NodeConfig{
+	resp := control.LoginResponse{
+		NodeConfig: control.NodeConfig{
 			ID:       node.ID,
 			TunnelIP: node.TunnelIP,
 			Routes:   node.Routes,
@@ -173,35 +174,42 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	c := make(chan types.NodeUpdateResponse, 3)
+	c := make(chan control.NodeUpdateResponse, 3)
 	done := make(chan bool)
 	s.nm.Subscribe(node.ID, c)
 
 	defer func() {
 		s.nm.Unsubscribe(node.ID, c)
+		close(done)
 		conn.Close()
 	}()
 
 	// TODO: Move away from ReadJSON when moving to Nacl Encryption
+
 	go func() {
-		defer close(done)
 		for {
 			select {
 			case <-done:
 				return
-			case update, ok := <-c:
-				if !ok {
-					slog.Info("server closed update channel", "node ID", node.ID)
+			default:
+			}
+			update := control.NodeUpdateRequest{}
+			err := conn.ReadJSON(&update)
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseGoingAway) {
 					return
 				}
-				err = conn.WriteJSON(update)
-				if err != nil {
-					if websocket.IsCloseError(err, websocket.CloseGoingAway) {
-						return
-					}
-					slog.Error("error writing update response", "node ID", node.ID, "error", err)
-					return
-				}
+				slog.Error("error reading update request", "node ID", node.ID, "error", err.Error())
+				return
+			}
+
+			if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
+				slog.Warn(
+					"error handing node update: node could be expired or disabled",
+					"node ID",
+					node.ID,
+				)
+				return
 			}
 		}
 	}()
@@ -210,26 +218,19 @@ func (s *Server) UpdateHandler(w http.ResponseWriter, req *http.Request) {
 		select {
 		case <-done:
 			return
-		default:
-		}
-
-		update := types.NodeUpdateRequest{}
-		err := conn.ReadJSON(&update)
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseGoingAway) {
+		case update, ok := <-c:
+			if !ok {
+				slog.Info("server closed update channel", "node ID", node.ID)
 				return
 			}
-			slog.Error("error reading update request", "node ID", node.ID, "error", err.Error())
-			return
-		}
-
-		if ok := s.nm.HandleNodeUpdateRequest(nodeKey, update); !ok {
-			slog.Warn(
-				"error handing node update: node could be expired or disabled",
-				"node ID",
-				node.ID,
-			)
-			return
+			err = conn.WriteJSON(update)
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseGoingAway) {
+					return
+				}
+				slog.Error("error writing update response", "node ID", node.ID, "error", err)
+				return
+			}
 		}
 	}
 }

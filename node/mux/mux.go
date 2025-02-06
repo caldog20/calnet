@@ -10,7 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/caldog20/calnet/node/probe"
+	"github.com/caldog20/calnet/types"
+	"github.com/caldog20/calnet/types/probe"
 	"github.com/pion/stun"
 )
 
@@ -19,22 +20,24 @@ import (
 const (
 	Udp            = "udp4"
 	StunTimer      = time.Second * 10
-	StunServerAddr = "stun:stun.l.google.com:19302"
+	StunServerAddr = "stun.l.google.com:19302"
 	MaxMTU         = 1400
 )
 
 type Mux struct {
-	nodeID uint64
-	conn   net.PacketConn
-
+	nodeID          uint64
+	nodeKey         types.PublicKey
+	conn            net.PacketConn
+	relayAddr       netip.AddrPort
 	listenEndpoints []netip.AddrPort
 	discoveredAddr  netip.AddrPort
 	xorMappedAddr   stun.XORMappedAddress
-
+	relayClient     *RelayClient
 	// Configurable Options
-	//stunServers []*net.UDPAddr
+	// stunServers []*net.UDPAddr
 
 	mu        sync.Mutex
+	nodeKeys  map[types.PublicKey]*Conn
 	nodes     map[uint64]*Conn
 	endpoints map[netip.AddrPort]*Conn
 
@@ -52,7 +55,12 @@ type Mux struct {
 	}
 }
 
-func NewConnMux(nodeID uint64, conn net.PacketConn) *Mux {
+func NewConnMux(
+	nodeID uint64,
+	nodeKey types.PublicKey,
+	conn net.PacketConn,
+	relayAddr string,
+) *Mux {
 	var listenEndpoints []netip.AddrPort
 	if listenAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
 		if listenAddr.IP.IsUnspecified() {
@@ -70,18 +78,70 @@ func NewConnMux(nodeID uint64, conn net.PacketConn) *Mux {
 	mux := &Mux{
 		conn:            conn,
 		nodeID:          nodeID,
+		nodeKey:         nodeKey,
 		listenEndpoints: listenEndpoints,
 		mu:              sync.Mutex{},
 		nodes:           make(map[uint64]*Conn),
+		nodeKeys:        make(map[types.PublicKey]*Conn),
 		endpoints:       make(map[netip.AddrPort]*Conn),
 		close:           make(chan struct{}),
 		closed:          atomic.Bool{},
 	}
 
+	mux.stunFunc = time.AfterFunc(StunTimer, mux.doStun)
+
+	mux.relayClient = &RelayClient{
+		DialAddr: relayAddr,
+		NodeKey:  nodeKey,
+	}
+
+	err := mux.relayClient.Dial()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go mux.relayRead()
 	go mux.stun()
 	go mux.read()
 
 	return mux
+}
+
+func (mux *Mux) GetConn(nodeID uint64, nodeKey types.PublicKey) (*Conn, error) {
+	if mux.IsClosed() {
+		return nil, net.ErrClosed
+	}
+
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+	// TODO: Remove IDs and only use public keys in map
+	ec, ok := mux.nodes[nodeID]
+	if ok {
+		if !ec.IsClosed() {
+			return ec, nil
+		}
+	}
+	// Conn is either closed or doesn't exist, so create...
+	conn := newConn(mux, nodeKey, nodeID)
+	mux.nodes[nodeID] = conn
+	mux.nodeKeys[nodeKey] = conn
+
+	return conn, nil
+}
+
+func (mux *Mux) RemoveConn(nodeKey types.PublicKey) {
+	mux.mu.Lock()
+	ec, ok := mux.nodeKeys[nodeKey]
+	if ok {
+		ec.Close()
+		delete(mux.nodeKeys, nodeKey)
+		delete(mux.nodes, ec.peerID)
+		for c, e := range mux.endpoints {
+			if e == ec {
+				delete(mux.endpoints, c)
+			}
+		}
+	}
 }
 
 func (mux *Mux) read() {
@@ -147,15 +207,65 @@ func (mux *Mux) read() {
 	}
 }
 
+func (mux *Mux) relayRead() {
+	// defer func() {
+	// 	mux.relayClient.Close()
+	// 	log.Println("breaking from relay read loop")
+	// }()
+	for {
+		if mux.IsClosed() {
+			return
+		}
+		data, err := mux.relayClient.Read()
+		if err != nil {
+			log.Println("error reading from relay:", err)
+			continue
+		}
+		if len(data) < 32 {
+			continue
+		}
+		dstKey := types.PublicKeyFromRawBytes(data[:32])
+		packet := data[32:]
+		if probe.IsProbeMessage(packet) {
+			mux.handleProbeFromRelay(dstKey, packet)
+			continue
+		}
+
+		mux.mu.Lock()
+		dstConn, ok := mux.nodeKeys[dstKey]
+		mux.mu.Unlock()
+		if !ok {
+			continue
+		}
+		dstConn.receive(data[32:])
+
+	}
+}
+
+func (mux *Mux) RelayPacket(packet []byte) {
+	if mux.IsClosed() {
+		return
+	}
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+	err := mux.relayClient.Write(packet)
+	if err != nil {
+		log.Println("error writing packet to relay:", err)
+	}
+}
+
 func (mux *Mux) stun() {
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+	mux.stunFunc.Stop()
 	mux.doStun()
-	mux.stunFunc = time.AfterFunc(StunTimer, mux.stun)
 }
 
 func (mux *Mux) doStun() {
 	if mux.IsClosed() {
 		return
 	}
+	defer mux.stunFunc.Reset(StunTimer)
 
 	stunAddr, err := net.ResolveUDPAddr(Udp, StunServerAddr)
 	if err != nil {
@@ -168,6 +278,33 @@ func (mux *Mux) doStun() {
 	if err != nil {
 		log.Printf("error sending stun request")
 		return
+	}
+}
+
+func (mux *Mux) handleProbeFromRelay(dst types.PublicKey, b []byte) {
+	pm := &probe.Probe{}
+	err := pm.Decode(b)
+	if err != nil {
+		log.Println("error decoding probe from relay")
+		return
+	}
+
+	mux.mu.Lock()
+	conn, ok := mux.nodeKeys[dst]
+	mux.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	switch pm.Type {
+	case probe.Call:
+		conn.handleCall()
+	case probe.EndpointRequest:
+		conn.handleEndpointRequest(pm.Endpoints)
+	case probe.EndpointResponse:
+		conn.handleEndpointResponse(pm.Endpoints)
+	default:
+		log.Println("received unexpected probe type from relay:", pm.Type)
 	}
 }
 
@@ -190,22 +327,23 @@ func (mux *Mux) handleProbe(b []byte, ep netip.AddrPort) {
 
 	switch pm.Type {
 	// Ping Probe - Send Ping back to endpoint
-	case probe.ProbePing:
+	case probe.Ping:
 		conn.addCandidateFromPing(ep)
-		mux.pingReply(ep)
+		mux.pingReply(pm.TxID, ep)
 	// Probe Pong - Pass to conn to handle
-	case probe.ProbePong:
+	case probe.Pong:
 		// Got pong message, tell conn
 		conn.handlePong(pm, ep)
-	// Not really using right now
-	case probe.ProbeSelect:
-		//conn.handleSelect(pm, ep)
+		// Not really using right now
+		// case probe.ProbeSelect:
+		// conn.handleSelect(pm, ep)
 	}
 }
 
-func (mux *Mux) pingReply(ep netip.AddrPort) {
+func (mux *Mux) pingReply(txid uint64, ep netip.AddrPort) {
 	pm := &probe.Probe{
-		Type:     probe.ProbePong,
+		Type:     probe.Pong,
+		TxID:     txid,
 		NodeID:   mux.nodeID,
 		Endpoint: &ep,
 	}
@@ -257,6 +395,9 @@ func (mux *Mux) handleStun(msg *stun.Message) {
 }
 
 func (mux *Mux) WriteTo(b []byte, ep netip.AddrPort) error {
+	if mux.IsClosed() {
+		return net.ErrClosed
+	}
 	_, err := mux.conn.WriteTo(b, net.UDPAddrFromAddrPort(ep))
 	return err
 }
@@ -269,9 +410,18 @@ func (mux *Mux) XorMappedAddress() netip.AddrPort {
 
 func (mux *Mux) ListenAddresses() []netip.AddrPort {
 	if mux.listenEndpoints == nil || len(mux.listenEndpoints) == 0 {
-		return []netip.AddrPort{netip.MustParseAddrPort(mux.conn.LocalAddr().String())}
+		return []netip.AddrPort{netip.MustParseAddrPort(mux.LocalAddr().String())}
 	}
 	return mux.listenEndpoints
+}
+
+func (mux *Mux) GetEndpoints() []netip.AddrPort {
+	addrs := mux.ListenAddresses()
+	stunAddr := mux.XorMappedAddress()
+	if stunAddr.IsValid() {
+		addrs = append(addrs, mux.XorMappedAddress())
+	}
+	return addrs
 }
 
 func (mux *Mux) LocalAddr() net.Addr {
@@ -283,13 +433,15 @@ func (mux *Mux) Close() error {
 	if mux.closed.Load() {
 		return nil
 	}
+	log.Println("Closing Mux")
 
 	mux.closed.Store(true)
+	mux.relayClient.Close()
 	mux.stunFunc.Stop()
+	log.Println("locking mux")
 
 	mux.mu.Lock()
 	defer mux.mu.Unlock()
-
 	for _, conn := range mux.nodes {
 		conn.Close()
 	}
@@ -298,6 +450,7 @@ func (mux *Mux) Close() error {
 	clear(mux.endpoints)
 
 	mux.conn.Close()
+	log.Println("mux closed")
 	return nil
 }
 

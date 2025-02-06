@@ -16,7 +16,6 @@ import (
 	"github.com/caldog20/calnet/manager"
 	"github.com/caldog20/calnet/manager/ipam"
 	"github.com/caldog20/calnet/manager/store"
-	"github.com/caldog20/calnet/manager/stun"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -38,7 +37,7 @@ func main() {
 
 	if *debug {
 		if *httpAddr == ":443" {
-			*httpAddr = "127.0.0.1:8080"
+			*httpAddr = ":8080"
 		}
 		*useAutocert = false
 	}
@@ -48,10 +47,12 @@ func main() {
 		log.Fatal("error parsing netip prefix:", err)
 	}
 
-	db, err := store.NewSqlStore(*dbPath)
-	if err != nil {
-		log.Fatal("failed to open database:", err)
-	}
+	//db, err := store.NewSqlStore(*dbPath)
+	//if err != nil {
+	//	log.Fatal("failed to open database:", err)
+	//}
+
+	db := store.NewMapStore()
 
 	ipam, err := ipam.New(prefix, db)
 	if err != nil {
@@ -71,17 +72,17 @@ func main() {
 		Handler: s,
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	if !(*noStun) {
-		go func() {
-			err := stun.ListenAndServe(ctx, *stunAddr)
-			if err != nil {
-				log.Println("stun server error:", err)
-				cancel()
-			}
-		}()
+		//go func() {
+		//	err := stun.ListenAndServe(ctx, *stunAddr)
+		//	if err != nil {
+		//		log.Println("stun server error:", err)
+		//		cancel()
+		//	}
+		//}()
 	}
 
 	if *useAutocert {

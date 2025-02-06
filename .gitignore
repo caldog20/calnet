@@ -30,3 +30,6 @@ bin/
 *.db-wal
 
 .idea/
+*.pem
+/bin
+

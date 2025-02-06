@@ -4,12 +4,11 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/caldog20/calnet/manager"
+	"github.com/caldog20/calnet/control"
 	"github.com/caldog20/calnet/types"
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	_ "modernc.org/sqlite"
 )
 
 var ErrNotFound = errors.New("not found in database")
@@ -27,13 +26,13 @@ func NewSqlStore(path string) (*SqlStore, error) {
 		sqlite.Open(path+"?cache=shared&_journal_mode=WAL&_synchronous=1"),
 		&gorm.Config{
 			PrepareStmt: true,
-			Logger:      logger.Default.LogMode(logger.Silent),
+			Logger:      logger.Default.LogMode(logger.Error),
 		})
 	if err != nil {
 		return nil, err
 	}
 
-	err = db.AutoMigrate(&manager.Node{})
+	err = db.AutoMigrate(&control.Node{})
 	if err != nil {
 		return nil, err
 	}
@@ -43,8 +42,8 @@ func NewSqlStore(path string) (*SqlStore, error) {
 	}, nil
 }
 
-func (s *SqlStore) GetNodes() (manager.Nodes, error) {
-	var nodes manager.Nodes
+func (s *SqlStore) GetNodes() (types.Nodes, error) {
+	var nodes types.Nodes
 	err := s.db.Find(&nodes).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -55,20 +54,20 @@ func (s *SqlStore) GetNodes() (manager.Nodes, error) {
 	return nodes, nil
 }
 
-func (s *SqlStore) CreateNode(node *manager.Node) error {
+func (s *SqlStore) CreateNode(node *control.Node) error {
 	return s.db.Create(node).Error
 }
 
-func (s *SqlStore) GetPeersOfNode(id uint64) (manager.Nodes, error) {
-	var nodes manager.Nodes
+func (s *SqlStore) GetPeersOfNode(id uint64) (types.Nodes, error) {
+	var nodes types.Nodes
 	if err := s.db.Where("id != ?", id).Find(&nodes).Error; err != nil {
 		return nil, err
 	}
 	return nodes, nil
 }
 
-func (s *SqlStore) GetNodeByPublicKey(publicKey types.PublicKey) (*manager.Node, error) {
-	var node *manager.Node
+func (s *SqlStore) GetNodeByPublicKey(publicKey types.PublicKey) (*control.Node, error) {
+	var node *control.Node
 	if err := s.db.Where("public_key = ?", publicKey).First(&node).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
@@ -78,8 +77,8 @@ func (s *SqlStore) GetNodeByPublicKey(publicKey types.PublicKey) (*manager.Node,
 	return node, nil
 }
 
-func (s *SqlStore) GetNodeByID(id uint64) (*manager.Node, error) {
-	var node *manager.Node
+func (s *SqlStore) GetNodeByID(id uint64) (*control.Node, error) {
+	var node *control.Node
 	if err := s.db.First(&node, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
@@ -95,7 +94,7 @@ func (s *SqlStore) DeleteNode(publicKey types.PublicKey) error {
 }
 
 func (s *SqlStore) GetAllocatedIps() ([]netip.Addr, error) {
-	var nodes []manager.Node
+	var nodes []control.Node
 	if err := s.db.Find(&nodes).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
@@ -111,7 +110,7 @@ func (s *SqlStore) GetAllocatedIps() ([]netip.Addr, error) {
 	return ips, nil
 }
 
-func (s *SqlStore) UpdateNode(node *manager.Node) error {
+func (s *SqlStore) UpdateNode(node *control.Node) error {
 	return s.db.Save(node).Error
 }
 
