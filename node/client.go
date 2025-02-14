@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ func (c *Client) Login(hostname string) (*control.NodeConfig, error) {
 		return nil, err
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, c.serverAddr + "/login", bytes.NewReader(b))
+	req, _ := http.NewRequest(http.MethodPost, c.serverAddr+"/login", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Node-Key", c.publicKey.String())
 	resp, err := c.hc.Do(req)
@@ -65,7 +66,7 @@ func (c *Client) Login(hostname string) (*control.NodeConfig, error) {
 	return &loginResp.NodeConfig, nil
 }
 
-func (c *Client) Poll() (*control.PollResponse, error) {
+func (c *Client) Poll(ctx context.Context) (*control.PollResponse, error) {
 	pollReq := control.PollRequest{
 		NodeKey: c.publicKey,
 	}
@@ -73,7 +74,12 @@ func (c *Client) Poll() (*control.PollResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, _ := http.NewRequest(http.MethodPost, c.serverAddr+"/poll", bytes.NewReader(b))
+	req, _ := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.serverAddr+"/poll",
+		bytes.NewReader(b),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(req)
 	if err != nil {

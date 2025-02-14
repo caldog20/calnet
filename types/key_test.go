@@ -3,6 +3,8 @@ package types
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/caldog20/calnet/types"
 )
 
 func TestMarshalJSONPublicKey(t *testing.T) {
@@ -20,4 +22,11 @@ func TestMarshalJSONPublicKey(t *testing.T) {
 	if pub1 != pub2 {
 		t.Fatal("pub1 and pub2 should be the same")
 	}
+}
+
+func TestPublicKeyFromRawBytes(t *testing.T) {
+    privKey := types.NewPrivateKey()
+    pubKey1 := privKey.Public()
+    rawKey1 := pubKey1.Raw()
+
 }

@@ -16,6 +16,10 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 )
 
+const (
+  HTTPShutdownCtxTimeout = time.Second * 5
+)
+
 type Store interface {
 	GetPeersOfNode(id uint64) ([]*control.Node, error)
 	GetNodeByKey(key types.PublicKey) (*control.Node, error)
@@ -38,6 +42,7 @@ type Server struct {
 
 	mu             sync.Mutex
 	notifyChannels map[uint64]chan struct{}
+    peerLastSeenByID map[uint64]time.Time
 
 	relayMu   sync.Mutex
 	relayCons map[types.PublicKey]*websocket.Conn
@@ -58,6 +63,7 @@ func NewServer(store Store) *Server {
 		mu:             sync.Mutex{},
 		notifyChannels: make(map[uint64]chan struct{}),
 		relayCons:      make(map[types.PublicKey]*websocket.Conn),
+        peerLastSeenByID: make(map[uint64]time.Time),
 		closed:         make(chan struct{}),
 	}
 
@@ -88,7 +94,7 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) Close() error {
 	close(s.closed)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), HTTPShutdownCtxTimeout)
 	defer cancel()
 	return s.srv.Shutdown(ctx)
 }

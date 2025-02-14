@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	RecheckBestAddr        = time.Second * 5
-	PingAllResponseTimeout = time.Second * 3
+	RecheckBestAddr        = time.Millisecond * 5500
+	EndpointPingInterval = time.Second * 5
 )
+
+var InvalidAddress = netip.AddrPort{}
 
 type sentping struct {
 	txID   uint64
@@ -28,9 +30,11 @@ type Endpoint struct {
 	lastPing time.Time
 	// last time we got a ping response from this endpoint
 	// use IsZero() to check if we ever got a pong
+	// On the first pong, send back a ping to ensure bidirectional connectivity is possible
 	lastPong time.Time
 	// measured latency
-	rtt time.Duration
+	rtt         time.Duration
+	activeSince time.Time
 }
 
 type Conn struct {
@@ -38,14 +42,12 @@ type Conn struct {
 	publicKey types.PublicKey
 	mux       *Mux
 
-	mu            sync.Mutex
-	candidates    []netip.AddrPort
-	best          netip.AddrPort
-	recheckBest   time.Time
-	lastPingCheck time.Time
-	lastPingAll   time.Time
-	lastPongAny   time.Time
-	// lastCallRequest time.Time
+	mu                 sync.Mutex
+	candidates         []netip.AddrPort
+	sendAddr           netip.AddrPort
+	recheckBest        time.Time
+	lastPacketReceived time.Time
+	lastPacketSent     time.Time
 	lastExchange time.Time
 	pings        map[uint64]sentping
 	endpoints    map[netip.AddrPort]*Endpoint
@@ -67,29 +69,31 @@ func newConn(mux *Mux, key types.PublicKey, peerID uint64) *Conn {
 	return c
 }
 
-func (c *Conn) pingAllLocked(requestCall bool) {
-	if len(c.endpoints) == 0 {
+func (c *Conn) pingAllLocked() {
+	if len(c.endpoints) == 0 || time.Since(c.lastExchange).Seconds() > 120 {
+		c.exchange()
 		return
 	}
-	c.lastPingCheck = time.Now()
+
 	for _, ep := range c.endpoints {
-		if !requestCall && time.Since(ep.lastPing).Seconds() < 3 {
+		if time.Since(ep.lastPing) <= EndpointPingInterval {
 			continue
 		}
+
+		if time.Since(ep.activeSince).Seconds() > 45 {
+			if ep.lastPong.IsZero() || time.Since(ep.lastPong).Seconds() > 10 {
+				c.deleteEndpointLocked(ep)
+        if c.sendAddr == ep.addr {
+          c.sendAddr = InvalidAddress
+        }
+			}
+		}
+
 		err := c.pingLocked(ep)
 		if err != nil {
 			log.Printf("ping failed: %v", err)
 			continue
 		}
-
-		if requestCall {
-			// Reset endpoints
-			ep.rtt = 0
-			ep.lastPong = time.Time{}
-		}
-	}
-	if requestCall {
-		c.requestCall()
 	}
 }
 
@@ -153,18 +157,20 @@ func (c *Conn) handlePong(pm *probe.Probe, ep netip.AddrPort) {
 
 	log.Println("got pong from:", ep.String())
 
-	c.lastPongAny = time.Now()
-
 	endpoint.lastPong = rxTime
 	endpoint.rtt = rtt
+  
+  if ep == c.sendAddr {
+    return
+  }
 
 	var maybeBetterAddr netip.AddrPort
-	if !c.best.IsValid() {
+	if !c.sendAddr.IsValid() {
 		maybeBetterAddr = endpoint.addr
-	} else if !c.best.Addr().IsPrivate() && endpoint.addr.Addr().IsPrivate() {
+	} else if !c.sendAddr.Addr().IsPrivate() && endpoint.addr.Addr().IsPrivate() {
 		maybeBetterAddr = endpoint.addr
 	} else {
-		curEp, ok := c.endpoints[c.best]
+		curEp, ok := c.endpoints[c.sendAddr]
 		if ok {
 			if curEp.rtt > endpoint.rtt && endpoint.rtt > 0 {
 				maybeBetterAddr = endpoint.addr
@@ -172,13 +178,13 @@ func (c *Conn) handlePong(pm *probe.Probe, ep netip.AddrPort) {
 		}
 	}
 
-	if maybeBetterAddr.IsValid() && maybeBetterAddr != c.best {
+	if maybeBetterAddr.IsValid() && maybeBetterAddr != c.sendAddr {
 		fmt.Printf(
 			"maybe have better address - old: %s - new: %s",
-			c.best.String(),
+			c.sendAddr.String(),
 			maybeBetterAddr.String(),
 		)
-		c.best = maybeBetterAddr
+		c.sendAddr = maybeBetterAddr
 		c.recheckBest = time.Now().Add(time.Second * 2)
 		// TODO Make this method on mux
 		// Map address to mux for future data packets from this endpoint
@@ -186,165 +192,32 @@ func (c *Conn) handlePong(pm *probe.Probe, ep netip.AddrPort) {
 		c.mux.endpoints[endpoint.addr] = c
 		c.mux.mu.Unlock()
 	}
-
-	for _, ep := range c.endpoints {
-		if !ep.lastPong.IsZero() && time.Since(ep.lastPong) > time.Second*15 {
-			c.deleteEndpointLocked(ep)
-			continue
-		}
-		if ep.lastPong.IsZero() && time.Since(ep.lastPing).Seconds() > 10 {
-			c.deleteEndpointLocked(ep)
-		}
-	}
 }
 
 func (c *Conn) deleteEndpointLocked(ep *Endpoint) {
 	delete(c.endpoints, ep.addr)
 }
 
-func (c *Conn) addCandidateFromPing(ipp netip.AddrPort) {
-	if c.IsClosed() {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	_, ok := c.endpoints[ipp]
-	if !ok {
-		// New Endpoint from a ping sent to us
-		endpoint := &Endpoint{
-			addr: ipp,
-		}
-		c.endpoints[ipp] = endpoint
-		c.pingLocked(endpoint)
-	}
-}
-
-func (c *Conn) Close() {
-	if c.closed.Load() {
-		return
-	}
-
-	c.closed.Store(true)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, ep := range c.endpoints {
-		c.deleteEndpointLocked(ep)
-	}
-}
-
-func (c *Conn) receive(bytes []byte) {
-	if c.IsClosed() {
-		return
-	}
-	fmt.Println("received from peer", string(bytes))
-	time.Sleep(time.Second * 1)
-	c.Write(bytes)
-}
-
-func (c *Conn) handleEndpointRequest(endpoints []netip.AddrPort) {
-	if c.IsClosed() {
-		return
-	}
-
-	c.mux.stun()
-	time.Sleep(time.Millisecond * 50)
-	log.Println("got endpoint request")
-	if len(endpoints) == 0 {
-		return
-	}
-	// Add requesting peers endpoints ahead of time
-	c.addCandidateEndpoints(endpoints)
-	c.mu.Lock()
-	c.lastExchange = time.Now()
-	c.mu.Unlock()
-	// reply to peer with our endpoints
-	ourEndpoints := c.mux.GetEndpoints()
-
-	epResponse := &probe.Probe{Type: probe.EndpointResponse, Endpoints: ourEndpoints}
-	msg, err := probe.Encode(epResponse)
-	if err != nil {
-		log.Println("error encoding endpoint response")
-		return
-	}
-
-	c.writeToRelay(msg)
-}
-
-func (c *Conn) handleEndpointResponse(endpoints []netip.AddrPort) {
-	if c.IsClosed() {
-		return
-	}
-	log.Println("got endpoint response")
-	c.addCandidateEndpoints(endpoints)
-}
-
-func (c *Conn) requestCall() {
-	log.Println("requesting call")
-	call := probe.New(0, probe.Call, nil)
-	msg, err := call.Encode()
-	if err != nil {
-		log.Println("error encoding call request")
-		return
-	}
-	c.writeToRelay(msg)
-}
-
-func (c *Conn) handleCall() {
-	log.Println("got call request")
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pingAllLocked(false)
-}
-
-func (c *Conn) exchange() {
-	log.Println("exchange triggered")
-	// Restun and wait a bit to try to get a fresh binding
-	c.mux.stun()
-	time.Sleep(time.Millisecond * 50)
-
-	endpoints := c.mux.GetEndpoints()
-	epRequest := &probe.Probe{Type: probe.EndpointRequest, Endpoints: endpoints}
-	msg, err := epRequest.Encode()
-	if err != nil {
-		log.Println("error encoding endpoint response")
-		return
-	}
-	c.writeToRelay(msg)
-	c.lastExchange = time.Now()
-}
-
 func (c *Conn) getBestAddr() netip.AddrPort {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.best.IsValid() {
-		switch {
-		case time.Since(c.lastExchange).Seconds() > 30:
-			c.exchange()
-		case time.Since(c.lastPingCheck).Seconds() > 5:
-			c.pingAllLocked(false)
-		case time.Since(c.lastPongAny).Seconds() > 5:
-			c.pingAllLocked(true)
-		}
+	if !c.sendAddr.IsValid() {
+		c.pingAllLocked()
 		return netip.AddrPort{}
 	}
 
-	if c.recheckBest.IsZero() || time.Since(c.recheckBest) > RecheckBestAddr {
-		c.pingAllLocked(false)
-		if time.Since(c.lastPongAny).Seconds() > 12 {
-			c.best = netip.AddrPort{}
-		}
-		c.recheckBest = time.Now().Add(RecheckBestAddr)
+	if c.recheckBest.IsZero() || time.Since(c.recheckBest).Milliseconds() > 5500 {
+    c.pingAllLocked()
 	}
 
-	if !c.best.IsValid() {
+	if !c.sendAddr.IsValid() {
 		fmt.Println("best address is relay")
 	} else {
-		fmt.Printf("best address is %s\n", c.best.String())
+		fmt.Printf("best address is %s\n", c.sendAddr.String())
 	}
 
-	return c.best
+	return c.sendAddr
 }
 
 // TODO: Return error incase of closure
@@ -373,28 +246,130 @@ func (c *Conn) writeToRelay(data []byte) {
 	c.mux.RelayPacket(packet)
 }
 
-func (c *Conn) addCandidateEndpoints(eps []netip.AddrPort) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Conn) receive(bytes []byte) {
+	if c.IsClosed() {
+		return
+	}
+	fmt.Println("received from peer", string(bytes))
+	// time.Sleep(time.Millisecond * 300)
+	c.Write(bytes)
+}
+
+func (c *Conn) addCandidateEndpointsLocked(eps []netip.AddrPort) {
 	fmt.Println("adding candidate endpoints", eps)
 	// atleastOne := false
 	for _, ep := range eps {
 		if !ep.IsValid() {
 			continue
 		}
-		_, ok := c.endpoints[ep]
+		existing, ok := c.endpoints[ep]
 		if !ok {
 			c.endpoints[ep] = &Endpoint{
-				addr: ep,
+				addr:        ep,
+				activeSince: time.Now(),
 			}
-			// atleastOne = true
+		} else {
+			existing.activeSince = time.Now()
 		}
 	}
-	// if atleastOne {
-	// 	c.pingAllLocked(false)
-	// }
+}
+
+func (c *Conn) addCandidateFromPing(ipp netip.AddrPort) {
+	if c.IsClosed() {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.addCandidateEndpointsLocked([]netip.AddrPort{ipp})
+}
+
+func (c *Conn) exchange() {
+	log.Println("exchange triggered")
+	// Restun and wait a bit to try to get a fresh binding
+	c.mux.stun()
+	time.Sleep(time.Millisecond * 50)
+
+	endpoints := c.mux.GetEndpoints()
+	epRequest := &probe.Probe{Type: probe.EndpointRequest, Endpoints: endpoints}
+	msg, err := epRequest.Encode()
+	if err != nil {
+		log.Println("error encoding endpoint response")
+		return
+	}
+	c.writeToRelay(msg)
+	c.lastExchange = time.Now()
+}
+
+func (c *Conn) handleEndpointRequest(endpoints []netip.AddrPort) {
+	if c.IsClosed() {
+		return
+	}
+
+	c.mux.stun()
+	time.Sleep(time.Millisecond * 50)
+	log.Println("got endpoint request")
+	if len(endpoints) == 0 {
+		return
+	}
+	// Add requesting peers endpoints ahead of time
+	c.mu.Lock()
+	c.addCandidateEndpointsLocked(endpoints)
+	c.lastExchange = time.Now()
+	c.mu.Unlock()
+	// reply to peer with our endpoints
+	ourEndpoints := c.mux.GetEndpoints()
+
+	epResponse := &probe.Probe{Type: probe.EndpointResponse, Endpoints: ourEndpoints}
+	msg, err := probe.Encode(epResponse)
+	if err != nil {
+		log.Println("error encoding endpoint response")
+		return
+	}
+
+	c.writeToRelay(msg)
+}
+
+func (c *Conn) handleEndpointResponse(endpoints []netip.AddrPort) {
+	if c.IsClosed() {
+		return
+	}
+	log.Println("got endpoint response")
+	c.mu.Lock()
+	c.addCandidateEndpointsLocked(endpoints)
+	c.mu.Unlock()
+}
+
+func (c *Conn) requestCall() {
+	log.Println("requesting call")
+	call := probe.New(0, probe.Call, nil)
+	msg, err := call.Encode()
+	if err != nil {
+		log.Println("error encoding call request")
+		return
+	}
+	c.writeToRelay(msg)
+}
+
+func (c *Conn) handleCall() {
+	log.Println("got call request")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pingAllLocked()
 }
 
 func (c *Conn) IsClosed() bool {
 	return c.closed.Load()
+}
+
+func (c *Conn) Close() {
+	if c.closed.Load() {
+		return
+	}
+
+	c.closed.Store(true)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, ep := range c.endpoints {
+		c.deleteEndpointLocked(ep)
+	}
 }

@@ -11,6 +11,10 @@ import (
 	"github.com/caldog20/calnet/node"
 )
 
+const (
+  ConfigPath = "/tmp/nodeconfig"
+)
+
 func main() {
 	hs, _ := os.Hostname()
 
@@ -23,5 +27,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer cancel()
 
+    
+
 	log.Fatal(node.Run(ctx, server, hostname))
 }
+

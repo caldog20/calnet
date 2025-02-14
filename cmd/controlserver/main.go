@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/caldog20/calnet/control/controlserver"
-	"github.com/caldog20/calnet/control/store"
+	"github.com/caldog20/calnet/control/controlserver/store"
 )
 
 func main() {

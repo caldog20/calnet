@@ -20,7 +20,12 @@ type BoltStore struct {
 
 func (b *BoltStore) GetPeersOfNode(id uint64) ([]*control.Node, error) {
 	var peers []*control.Node
-	err := b.db.View(func(tx *bolt.Tx) error {
+	_, err := b.GetNodeByID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("nodes"))
 		c := b.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -111,8 +116,11 @@ func itob(v uint64) []byte {
 }
 
 func (b *BoltStore) DeleteNode(id uint64) error {
-	// TODO implement me
-	panic("implement me")
+	return b.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("nodes"))
+		b.Delete(itob(id))
+		return nil
+	})
 }
 
 func (b *BoltStore) UpdateNode(node *control.Node) error {
@@ -139,10 +147,7 @@ func (b *BoltStore) GetAllocatedNodeIPs() ([]netip.Addr, error) {
 			allocatedNodeIPs = append(allocatedNodeIPs, node.TunnelIP)
 			return nil
 		})
-		if err != nil {
-			return err
-		}
-		return nil
+	    return err	
 	})
 	if err != nil {
 		return nil, err

@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/caldog20/calnet/control"
-	"github.com/caldog20/calnet/control/store"
 	"github.com/caldog20/calnet/types"
 	"github.com/gorilla/websocket"
 )
 
+var ErrNotFoundInStore = errors.New("node found in database")
+
 var upgrader = websocket.Upgrader{
-	ReadBufferSize: 2048,
+	ReadBufferSize:  2048,
 	WriteBufferSize: 2048,
 }
 
@@ -44,7 +45,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	node, err := s.store.GetNodeByKey(loginRequest.NodeKey)
-	if err != nil && errors.Is(err, store.ErrNotFound) {
+	if err != nil && errors.Is(err, ErrNotFoundInStore) {
 		if loginRequest.ProvisionKey != "please" {
 			http.Error(w, "invalid provisioning key", http.StatusBadRequest)
 			return
@@ -107,7 +108,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 
 	node, err := s.store.GetNodeByKey(pollRequest.NodeKey)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, ErrNotFoundInStore) {
 			http.Error(w, "node not found", http.StatusNotFound)
 		} else {
 			http.Error(w, "error getting node by key", http.StatusInternalServerError)
@@ -120,6 +121,10 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+    s.mu.Lock()
+    s.peerLastSeenByID[node.ID] = time.Now()
+    s.mu.Unlock()
+    
 	notifyChan := s.getNotifyChan(node.ID)
 
 	for {
@@ -157,7 +162,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 
 	node, err := s.store.GetNodeByKey(nodeKey)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, ErrNotFoundInStore) {
 			http.Error(w, "node must be registered before using relay", http.StatusBadRequest)
 		} else {
 			http.Error(w, "error finding node", http.StatusInternalServerError)

@@ -34,7 +34,6 @@ func getEndpointsForUnspecified(port uint16) ([]netip.AddrPort, error) {
 
 		addrs, err := i.Addrs()
 		if err != nil {
-			log.Println(fmt.Errorf("localAddresses: %+v\n", err.Error()))
 			continue
 		}
 

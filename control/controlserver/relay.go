@@ -9,7 +9,7 @@ import (
 
 func (s *Server) registerRelayConn(nodeKey types.PublicKey, conn *websocket.Conn) {
 	log.Println("registering websocket conn for key:", nodeKey.String())
-	
+
 	s.relayMu.Lock()
 	defer s.relayMu.Unlock()
 
@@ -24,7 +24,7 @@ func (s *Server) registerRelayConn(nodeKey types.PublicKey, conn *websocket.Conn
 
 func (s *Server) removeRelayConn(nodeKey types.PublicKey, conn *websocket.Conn) {
 	log.Println("removing websocket conn for key:", nodeKey.String())
-	
+
 	s.relayMu.Lock()
 	defer s.relayMu.Unlock()
 
@@ -44,6 +44,12 @@ func (s *Server) relay(nodeKey types.PublicKey, conn *websocket.Conn) {
 	s.registerRelayConn(nodeKey, conn)
 	defer conn.Close()
 	defer s.removeRelayConn(nodeKey, conn)
+	defer func() {
+		n, _ := s.store.GetNodeByKey(nodeKey)
+		if n != nil {
+			s.store.DeleteNode(n.ID)
+		}
+	}()
 	s.relayLoop(nodeKey, conn)
 }
 
@@ -75,23 +81,23 @@ func (s *Server) relayLoop(nodeKey types.PublicKey, conn *websocket.Conn) {
 
 		dst := packet[:32]
 		dstKey := types.PublicKeyFromRawBytes(dst)
-		
+
 		// Lock since we can only have one concurrent writer to any websocket conn
 		s.relayMu.Lock()
-		
+
 		dstConn, ok := s.relayCons[dstKey]
 		if !ok {
 			log.Println("relay conn not found for destination")
 			s.relayMu.Unlock()
 			continue
 		}
-		
+
 		data := nodeKey.Raw()
 		data = append(data, packet[32:]...)
 		err = dstConn.WriteMessage(websocket.BinaryMessage, data)
-		
+
 		s.relayMu.Unlock()
-		
+
 		if err != nil {
 			log.Println("error writing to destination relay conn:", err)
 			continue

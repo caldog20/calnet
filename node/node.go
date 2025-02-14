@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/caldog20/calnet/node/mux"
 	"github.com/caldog20/calnet/types"
@@ -60,7 +61,7 @@ func Run(ctx context.Context, server, hostname string) error {
 		default:
 		}
 
-		update, err := client.Poll()
+		update, err := client.Poll(ctx)
 		if err != nil {
 			log.Println(err)
 			continue
@@ -81,7 +82,7 @@ func Run(ctx context.Context, server, hostname string) error {
 						if hostname == "test" {
 							go writePeerConn(c)
 						}
-					 }//  else {
+					} //  else {
 					// 	node.mux.RemoveConn(peer.PublicKey)
 					// 	c, err := node.mux.GetConn(peer.ID, peer.PublicKey)
 					// 	if err != nil {
@@ -101,7 +102,7 @@ func Run(ctx context.Context, server, hostname string) error {
 func writePeerConn(c *mux.Conn) {
 	s := []byte("Hello Conn")
 	// for {
-	// time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 2)
 	c.Write(s)
 	// }
 }

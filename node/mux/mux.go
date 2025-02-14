@@ -36,6 +36,7 @@ type Mux struct {
 	// stunServers []*net.UDPAddr
 
 	mu        sync.Mutex
+	relayMu   sync.Mutex
 	nodeKeys  map[types.PublicKey]*Conn
 	nodes     map[uint64]*Conn
 	endpoints map[netip.AddrPort]*Conn
@@ -80,6 +81,7 @@ func NewConnMux(
 		nodeKey:         nodeKey,
 		listenEndpoints: listenEndpoints,
 		mu:              sync.Mutex{},
+		relayMu:         sync.Mutex{},
 		nodes:           make(map[uint64]*Conn),
 		nodeKeys:        make(map[types.PublicKey]*Conn),
 		endpoints:       make(map[netip.AddrPort]*Conn),
@@ -87,7 +89,8 @@ func NewConnMux(
 		closed:          atomic.Bool{},
 	}
 
-	mux.stunFunc = time.AfterFunc(StunTimer, mux.doStun)
+	// Initial Stun to discover endpoint when mux starts
+	mux.stunFunc = time.AfterFunc(time.Millisecond * 250, mux.doStun)
 
 	mux.relayClient = &RelayClient{
 		DialAddr: relayAddr,
@@ -99,9 +102,8 @@ func NewConnMux(
 		log.Fatal(err)
 	}
 
-	go mux.relayRead()
-	go mux.stun()
 	go mux.read()
+	go mux.relayRead()
 
 	return mux
 }
@@ -246,8 +248,8 @@ func (mux *Mux) RelayPacket(packet []byte) {
 	if mux.IsClosed() {
 		return
 	}
-	mux.mu.Lock()
-	defer mux.mu.Unlock()
+	mux.relayMu.Lock()
+	defer mux.relayMu.Unlock()
 	err := mux.relayClient.Write(packet)
 	if err != nil {
 		log.Println("error writing packet to relay:", err)
@@ -334,9 +336,6 @@ func (mux *Mux) handleProbe(b []byte, ep netip.AddrPort) {
 	case probe.Pong:
 		// Got pong message, tell conn
 		conn.handlePong(pm, ep)
-		// Not really using right now
-		// case probe.ProbeSelect:
-		// conn.handleSelect(pm, ep)
 	}
 }
 
@@ -433,12 +432,10 @@ func (mux *Mux) Close() error {
 	if mux.closed.Load() {
 		return nil
 	}
-	log.Println("Closing Mux")
 
 	mux.closed.Store(true)
 	mux.relayClient.Close()
 	mux.stunFunc.Stop()
-	log.Println("locking mux")
 
 	mux.mu.Lock()
 	defer mux.mu.Unlock()
@@ -450,7 +447,6 @@ func (mux *Mux) Close() error {
 	clear(mux.endpoints)
 
 	mux.conn.Close()
-	log.Println("mux closed")
 	return nil
 }
 

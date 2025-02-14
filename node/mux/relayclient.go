@@ -3,15 +3,18 @@ package mux
 import (
 	"errors"
 	"fmt"
-	"github.com/caldog20/calnet/types"
-	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/caldog20/calnet/types"
+	"github.com/gorilla/websocket"
 )
+
+var ErrNotConnected = errors.New("relay client is not connected")
 
 type RelayClient struct {
 	mu           sync.Mutex
@@ -95,6 +98,7 @@ func (r *RelayClient) connect() {
 }
 
 func (r *RelayClient) Read() (data []byte, err error) {
+	err = ErrNotConnected
 	if r.IsConnected() {
 		_, data, err = r.conn.ReadMessage()
 		if err != nil {
@@ -108,6 +112,7 @@ func (r *RelayClient) Read() (data []byte, err error) {
 }
 
 func (r *RelayClient) Write(data []byte) (err error) {
+	err = ErrNotConnected
 	if r.IsConnected() {
 		err = r.conn.WriteMessage(websocket.BinaryMessage, data)
 		if err != nil {
