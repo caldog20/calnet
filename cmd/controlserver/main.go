@@ -11,7 +11,7 @@ import (
 
 	"github.com/caldog20/calnet/control/server/apiservice"
 	"github.com/caldog20/calnet/control/server/config"
-	control "github.com/caldog20/calnet/control/server/controlservice"
+	"github.com/caldog20/calnet/control/server/controlservice"
 	"github.com/caldog20/calnet/control/server/relayservice"
 	"github.com/caldog20/calnet/control/server/store"
 	"golang.org/x/crypto/acme/autocert"
@@ -32,7 +32,7 @@ func main() {
 	}
 	defer db.Close()
 
-	control := control.New(conf, db)
+	control := controlservice.New(conf, db)
 	defer control.Close()
 
 	relay := relayservice.New()
