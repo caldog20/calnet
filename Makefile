@@ -7,33 +7,21 @@ BIN_DIR ?= bin
 
 all: manager node
 
-manager:
-	go build -o $(BIN_DIR)/manager cmd/manager/main.go
+control:
+	go build -o $(BIN_DIR)/control/server cmd/controlserver/main.go
 
-run-manager: manager
-	./bin/manager
+run-control: control
+	./bin/control/server -config bin/control -debug true
 
 node:
 
 tidy:
 	@go mod tidy
 
-proto:
-	@buf generate
-
-buf-lint:
-	@buf lint
-
-deps:
-	go install github.com/bufbuild/buf/cmd/buf@latest
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
-
 clean:
-	rm -rf $(BIN_DIR)/*
-	rm -rf proto/gen
+	rm -f $(BIN_DIR)/control/server
 
-clean-db:
-	@rm -f store.db
+full-clean:
+	rm -rf $(BIN_DIR)/*
 	
-.PHONY: tidy proto buf-lint all manager client clean
+.PHONY: tidy all control clean full-clean

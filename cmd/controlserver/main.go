@@ -20,6 +20,7 @@ import (
 var (
 	httpPort  = flag.Int("http-port", 0, "http listen port")
 	debugMode = flag.Bool("debug", false, "enable debug mode disables encryption and ssl")
+	configPath = flag.String("config", "", "path to read config file - if unset, config will try to read from standard os config paths")
 )
 
 func main() {
@@ -75,6 +76,10 @@ func main() {
 
 func getConfig() config.Config {
 	var conf config.Config
+	
+	if *configPath != "" {
+		config.SetConfigPath(*configPath)
+	}
 
 	err := conf.ReadConfigFromFile()
 	if err != nil {
@@ -88,10 +93,12 @@ func getConfig() config.Config {
 	}
 
 	// Flags are prioritized over config entries for now
+	// These are not currently writen back to the config file
 	if *httpPort != 0 {
 		conf.HTTPPort = *httpPort
 	}
 	if *debugMode {
+		log.Println("server running in debug mode!")
 		if conf.Debug != *debugMode {
 			conf.Debug = *debugMode
 		}

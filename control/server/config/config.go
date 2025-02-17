@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 )
 
+var ConfigFilePath string
+
 const (
 	ConfigFileName = "config.json"
 	StoreFileName  = "store.db"
@@ -23,9 +25,14 @@ type Config struct {
 	// Auth Stuff
 }
 
+func SetConfigPath(path string) {
+	ConfigFilePath = path
+}
+
 func (c *Config) ReadConfigFromFile() error {
-	path := filepath.Join(ConfigPath(), ConfigFileName)
-	configFile, err := os.Open(path)
+	configPath := filepath.Join(ConfigPath(), ConfigFileName)
+
+	configFile, err := os.Open(configPath)
 	if err != nil {
 		return err
 	}
@@ -40,14 +47,14 @@ func (c *Config) ReadConfigFromFile() error {
 }
 
 func (c *Config) WriteConfigFile() error {
-	path := filepath.Join(ConfigPath(), ConfigFileName)
-	f, err := os.Open(path)
+	configPath := filepath.Join(ConfigPath(), ConfigFileName)
+
+	f, err := os.Open(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Printf("config file doesn't exist, creating %s", ConfigPath())
-			configFilePath := filepath.Join(ConfigPath(), ConfigFileName)
 			os.MkdirAll(ConfigPath(), 0700)
-			if f, err = os.OpenFile(configFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666); err != nil {
+			if f, err = os.OpenFile(configPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666); err != nil {
 				return err
 			}
 
@@ -72,11 +79,14 @@ func (c *Config) SetDefaults() {
 }
 
 func ConfigPath() string {
+	if ConfigFilePath != "" {
+		return filepath.Join(ConfigFilePath, "config")
+	}
+
 	subDir := "calnet"
 	homeDir, err := os.UserConfigDir()
 	if err != nil {
 		homeDir = "./"
 	}
-	return filepath.Join("./", subDir)
-	return filepath.Join(homeDir, subDir)
+	return filepath.Join(homeDir, subDir, "config")
 }
