@@ -23,6 +23,7 @@ go.work.sum
 
 # env file
 .env
+
 bin/
 
 *.db
@@ -31,5 +32,5 @@ bin/
 
 .idea/
 *.pem
-/bin
 
+**/.DS_Store
