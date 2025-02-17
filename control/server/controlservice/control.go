@@ -108,7 +108,7 @@ func (c *Control) getNodePollChan(id uint64) chan struct{} {
 	defer c.mu.Unlock()
 	pn, ok := c.pollingNodes[id]
 	if !ok {
-		pn := &pollingNode{
+		pn = &pollingNode{
 			ch: make(chan struct{}, 1),
 		}
 		c.pollingNodes[id] = pn
