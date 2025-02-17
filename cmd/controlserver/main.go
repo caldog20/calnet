@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,19 +9,28 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/caldog20/calnet/control/server/apiservice"
 	"github.com/caldog20/calnet/control/server/config"
 	"github.com/caldog20/calnet/control/server/controlservice"
 	"github.com/caldog20/calnet/control/server/relayservice"
 	"github.com/caldog20/calnet/control/server/store"
+	"github.com/caldog20/calnet/control/server/stunservice"
 	"golang.org/x/crypto/acme/autocert"
 )
 
 var (
-	httpPort  = flag.Int("http-port", 0, "http listen port")
-	debugMode = flag.Bool("debug", false, "enable debug mode disables encryption and ssl")
-	configPath = flag.String("config", "", "path to read config file - if unset, config will try to read from standard os config paths")
+	httpPort   = flag.Int("http-port", 0, "http listen port")
+	stunPort   = flag.Int("stun-port", 0, "stun listen port")
+	debugMode  = flag.Bool("debug", false, "enable debug mode disables encryption and ssl")
+	configPath = flag.String(
+		"config",
+		"",
+		"path to read config file - if unset, config will try to read from standard os config paths",
+	)
 )
 
 func main() {
@@ -41,7 +51,6 @@ func main() {
 	defer relay.Close()
 
 	api := apiservice.New(db)
-
 
 	mux := http.NewServeMux()
 	control.RegisterRoutes(mux)
@@ -64,19 +73,35 @@ func main() {
 	log.Printf("http server listening on %s", l.Addr().String())
 	defer l.Close()
 
-	// ctx, cancel := signal.NotifyContext(
-	// 	context.Background(),
-	// 	os.Interrupt,
-	// 	syscall.SIGQUIT,
-	// 	syscall.SIGTERM,
-	// )
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGQUIT,
+		syscall.SIGTERM,
+	)
+	defer cancel()
 
-	srv.Serve(l)
+	go srv.Serve(l)
+
+	err = stunservice.ListenAndServe(ctx, fmt.Sprintf(":%d", uint16(conf.StunPort)))
+	if err != nil {
+		log.Printf("stun server error: %s", err)
+		cancel()
+	}
+
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	err = srv.Shutdown(shutdownCtx)
+	if err != nil {
+		log.Printf("error gracefully closing http server: %s", err)
+		srv.Close()
+	}
 }
 
 func getConfig() config.Config {
 	var conf config.Config
-	
+
 	if *configPath != "" {
 		config.SetConfigPath(*configPath)
 	}
@@ -97,6 +122,11 @@ func getConfig() config.Config {
 	if *httpPort != 0 {
 		conf.HTTPPort = *httpPort
 	}
+
+	if *stunPort != 0 {
+		conf.StunPort = *stunPort
+	}
+
 	if *debugMode {
 		log.Println("server running in debug mode!")
 		if conf.Debug != *debugMode {

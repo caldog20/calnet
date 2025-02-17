@@ -20,6 +20,7 @@ type Config struct {
 	NetworkPrefix  netip.Prefix `json:"network_prefix"`
 	StorePath      string       `json:"store_path"`
 	HTTPPort       int          `json:"http_port"`
+	StunPort       int          `json:"stun_port"`
 	AutoCertDomain string       `json:"autocert_domain"`
 	Debug          bool         `json:"debug_mode"`
 	// Auth Stuff
@@ -73,6 +74,7 @@ func (c *Config) SetDefaults() {
 		NetworkPrefix:  netip.MustParsePrefix("100.70.0.0/24"),
 		StorePath:      filepath.Join(ConfigPath(), StoreFileName),
 		HTTPPort:       8080,
+		StunPort:       3478,
 		AutoCertDomain: "",
 		Debug:          false,
 	}
