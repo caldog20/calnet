@@ -1,5 +1,5 @@
 # Calnet
-Calnet is a peer-to-peer encrypted tunneling network project. It is similar to Tailscale, Netbird, and Wireguard. It uses Noise IK encryption for traffic between peers. 
+Calnet is a peer-to-peer encrypted tunneling network project. It is similar to Tailscale, Netbird, and Wireguard. It uses Noise IK encryption for traffic between peers. This project is for my own research and learning experience and is not for production use, nor is officially proven to be secure. 
 
 ## Control Plane
 The control-plane of Calnet is a server package that runs an HTTP server and a STUN server. The HTTP server serves endpoints for the control-plane to manage peers and share peer information (node configuration, firewall rules, peer public keys, metadata, etc). The HTTP server also serves a websocket endpoint for relayed traffic when a peer-to-peer tunnel cannot be built between nodes. The REST API for management and frontend-usage is also served from the server package. 
