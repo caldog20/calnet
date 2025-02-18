@@ -19,9 +19,12 @@ type Client struct {
 	c          *http.Client
 	controlURL *url.URL
 
-	serverKey  keys.PublicKey
-	controlKey keys.PrivateKey
-	nodeKey    keys.PublicKey
+    // Control Server Public Key
+	controlPublic  keys.PublicKey
+    // Node Control Private Key
+	controlPrivate keys.PrivateKey
+    // Node Data Public Key 
+	nodePublic    keys.PublicKey
 
 	mu       sync.Mutex
 	loggedIn bool
@@ -35,8 +38,8 @@ func New(controlKey keys.PrivateKey, nodeKey keys.PublicKey, serverAddr string) 
 	return &Client{
 		c:          &http.Client{},
 		controlURL: u,
-		controlKey: controlKey,
-		nodeKey:    nodeKey,
+		controlPrivate: controlKey,
+		nodePublic:    nodeKey,
 	}
 }
 
@@ -63,7 +66,7 @@ func (c *Client) getServerKey() error {
 
 	// c.mu.Lock()
 	// defer c.mu.Unlock()
-	c.serverKey = serverKeyResp.PublicKey
+	c.controlPublic = serverKeyResp.PublicKey
 
 	return nil
 }
@@ -72,7 +75,7 @@ func (c *Client) Login(ctx context.Context) (*controlapi.LoginResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.serverKey.IsZero() {
+	if c.controlPublic.IsZero() {
 		err := c.getServerKey()
 		if err != nil {
 			return nil, err
@@ -80,7 +83,7 @@ func (c *Client) Login(ctx context.Context) (*controlapi.LoginResponse, error) {
 	}
 
 	loginReq := controlapi.LoginRequest{
-		NodeKey:      c.nodeKey,
+		NodeKey:      c.nodePublic,
 		ProvisionKey: "please",
 	}
 
@@ -89,14 +92,14 @@ func (c *Client) Login(ctx context.Context) (*controlapi.LoginResponse, error) {
 		return nil, err
 	}
 
-    encrypted := c.controlKey.EncryptBox(b, c.serverKey)
+    encrypted := c.controlPrivate.EncryptBox(b, c.controlPublic)
 
 	req, _ := http.NewRequest(
 		"POST",
 		c.controlURL.JoinPath("/login").String(),
 		bytes.NewReader(encrypted),
 	)
-	req.Header.Set("X-Control-Key", c.controlKey.PublicKey().EncodeToString())
+	req.Header.Set("X-Control-Key", c.controlPrivate.PublicKey().EncodeToString())
 	resp, err := c.c.Do(req)
 	if err != nil {
 		return nil, err
@@ -109,7 +112,7 @@ func (c *Client) Login(ctx context.Context) (*controlapi.LoginResponse, error) {
 		return nil, err
 	}
 
-	decrypted, ok := c.controlKey.DecryptBox(b, c.serverKey)
+	decrypted, ok := c.controlPrivate.DecryptBox(b, c.controlPublic)
 	if !ok {
 		return nil, errors.New("error decrypting control login response")
 	}
@@ -136,7 +139,7 @@ func (c *Client) StartPoll(ctx context.Context, callback func(*controlapi.PollRe
 	if !c.loggedIn {
 		return errors.New("client must be logged in before polling")
 	}
-	if c.serverKey.IsZero() {
+	if c.controlPublic.IsZero() {
 		return errors.New("control server key is zero: cannot poll")
 	}
 	c.mu.Unlock()
@@ -150,9 +153,9 @@ func (c *Client) StartPoll(ctx context.Context, callback func(*controlapi.PollRe
 			}
 
 			c.mu.Lock()
-			cKey := c.controlKey
-			sKey := c.serverKey
-			nKey := c.nodeKey
+			cKey := c.controlPrivate
+			sKey := c.controlPublic
+			nKey := c.nodePublic
 			c.mu.Unlock()
 
 			pollReq.NodeKey = nKey
@@ -189,7 +192,7 @@ func (c *Client) StartPoll(ctx context.Context, callback func(*controlapi.PollRe
 				continue
 			}
 
-			decrypted, ok := c.controlKey.DecryptBox(b, c.serverKey)
+			decrypted, ok := c.controlPrivate.DecryptBox(b, c.controlPublic)
 			if !ok {
 				log.Println("error decrypting control login response")
 				continue
