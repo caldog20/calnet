@@ -47,21 +47,24 @@ func TestControlClientPoll(t *testing.T) {
 		resp = pr
 		gotResp <- struct{}{}
 	})
-
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	<-gotResp
+	select {
+	case <-gotResp:
+	case <-ctx.Done():
+		t.Fatal("context expired before resp received")
+	}
 
 	if resp == nil {
 		t.Fatal("nil poll response")
 	}
-	
+
 	if resp.Config == nil {
 		t.Fatalf("got nil node config, expected proper config")
 	}
-	
+
 	if resp.KeyExpired {
 		t.Fatalf("got key expired, expected registered new node key")
 	}
