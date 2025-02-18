@@ -24,10 +24,10 @@ func TestPublicKeyFromRawBytes(t *testing.T) {
 	k := NewPrivateKey()
 	pub := k.PublicKey()
 
-    bytes := pub.Raw()
+	bytes := pub.Raw()
 
-    newPub := NewPublicKeyFromRawBytes(bytes)
-    if pub != newPub {
-        t.Fatalf("got %x expected %x", pub.k, newPub.k)
-    }
+	newPub := NewPublicKeyFromRawBytes(bytes)
+	if pub != newPub {
+		t.Fatalf("got %x expected %x", pub.k, newPub.k)
+	}
 }

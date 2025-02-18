@@ -90,7 +90,7 @@ func (c *Control) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &controlapi.LoginResponse{
-		LoggedIn: loggedIn,
+		LoggedIn:   loggedIn,
 		KeyExpired: expired,
 	}
 

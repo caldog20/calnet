@@ -23,7 +23,7 @@ func ListenAndServe(ctx context.Context, listenAddr string) error {
 		return err
 	}
 
-    log.Printf("stun server listening on %s", conn.LocalAddr().String())
+	log.Printf("stun server listening on %s", conn.LocalAddr().String())
 
 	go func() {
 		<-ctx.Done()

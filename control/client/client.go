@@ -19,12 +19,12 @@ type Client struct {
 	c          *http.Client
 	controlURL *url.URL
 
-    // Control Server Public Key
-	controlPublic  keys.PublicKey
-    // Node Control Private Key
+	// Control Server Public Key
+	controlPublic keys.PublicKey
+	// Node Control Private Key
 	controlPrivate keys.PrivateKey
-    // Node Data Public Key 
-	nodePublic    keys.PublicKey
+	// Node Data Public Key
+	nodePublic keys.PublicKey
 
 	mu       sync.Mutex
 	loggedIn bool
@@ -36,10 +36,10 @@ func New(controlKey keys.PrivateKey, nodeKey keys.PublicKey, serverAddr string) 
 		panic("invalid server url")
 	}
 	return &Client{
-		c:          &http.Client{},
-		controlURL: u,
+		c:              &http.Client{},
+		controlURL:     u,
 		controlPrivate: controlKey,
-		nodePublic:    nodeKey,
+		nodePublic:     nodeKey,
 	}
 }
 
@@ -92,7 +92,7 @@ func (c *Client) Login(ctx context.Context) (*controlapi.LoginResponse, error) {
 		return nil, err
 	}
 
-    encrypted := c.controlPrivate.EncryptBox(b, c.controlPublic)
+	encrypted := c.controlPrivate.EncryptBox(b, c.controlPublic)
 
 	req, _ := http.NewRequest(
 		"POST",
