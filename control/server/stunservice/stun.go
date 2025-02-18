@@ -10,6 +10,8 @@ import (
 	"github.com/pion/stun"
 )
 
+// TODO: Refactor this to hold some state and add some methods to match other implementations of controlserver
+
 func ListenAndServe(ctx context.Context, listenAddr string) error {
 	addr, err := net.ResolveUDPAddr("udp4", listenAddr)
 	if err != nil {

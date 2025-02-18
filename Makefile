@@ -11,7 +11,7 @@ control:
 	go build -o $(BIN_DIR)/control/server cmd/controlserver/main.go
 
 run-control: control
-	./bin/control/server -config bin/control -debug true
+	./bin/control/server -config bin/control
 
 node:
 

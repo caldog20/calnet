@@ -100,3 +100,7 @@ func (k PublicKey) EncodeToString() string {
 func (k PublicKey) Raw() []byte {
 	return bytes.Clone(k.k[:])
 }
+
+func (k PublicKey) IsZero() bool {
+	return k == PublicKey{}
+}

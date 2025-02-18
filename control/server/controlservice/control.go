@@ -65,7 +65,7 @@ func New(conf config.Config, store store.Store) *Control {
 }
 
 func (c *Control) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /controlkey", c.handleControlKey)
+	mux.HandleFunc("GET /key", c.handleControlKey)
 	mux.HandleFunc("POST /login", c.handleLogin)
 	mux.HandleFunc("POST /poll", c.handlePoll)
 }

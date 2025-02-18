@@ -61,6 +61,9 @@ func (c *Control) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	loggedIn := true
+	expired := false
+
 	log.Printf("processing login for node key: %s", login.NodeKey.EncodeToString())
 	n, err := c.store.GetNodeByKey(login.NodeKey)
 	if err != nil {
@@ -81,13 +84,14 @@ func (c *Control) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		if n.IsExpired() {
-			http.Error(w, "node is expired", http.StatusUnauthorized)
-			return
+			loggedIn = false
+			expired = true
 		}
 	}
 
 	resp := &controlapi.LoginResponse{
-		LoggedIn: true,
+		LoggedIn: loggedIn,
+		KeyExpired: expired,
 	}
 
 	data, err = json.Marshal(resp)
