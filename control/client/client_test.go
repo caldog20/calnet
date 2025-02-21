@@ -40,7 +40,7 @@ func TestControlClientLogin(t *testing.T) {
 func TestControlClientPoll(t *testing.T) {
 	resp := &controlapi.PollResponse{}
 	gotResp := make(chan struct{})
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*100)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
 	err := c.StartPoll(ctx, func(pr *controlapi.PollResponse) {
